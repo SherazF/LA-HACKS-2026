@@ -17,12 +17,36 @@ class ModelManager:
         self.model_name = model_name
         self.queue = asyncio.PriorityQueue()
         self.context = ContextManager(image_limit=3)
+        self.system_prompt_tpl = """You are an expert PC building assistant with vision capabilities.
+
+        Your job is to guide the user step-by-step using:
+        1. The current camera image
+        2. The conversation history
+
+        You MUST:
+        - Be specific and actionable
+        - Point out mistakes clearly
+        - Give step-by-step instructions
+        - Reference visible components when possible
+
+        Always structure responses like:
+
+        OBSERVATION:
+        What you see in the image
+
+        ISSUES:
+        What is wrong or risky
+
+        ACTION:
+        Clear step-by-step instructions
+
+        Keep responses concise but precise.
+        Avoid generic advice."""
         self.processing_lock = asyncio.Lock()
         self.current_task = None
         
         # Load Prompts
         self.prompt_dir = os.path.join(os.path.dirname(__file__), "prompts")
-        self.system_prompt_tpl = self._load_prompt("system_prompt.txt")
         self.initial_request_tpl = self._load_prompt("initial_request.txt")
         
         # Subscribe to events
@@ -116,7 +140,37 @@ class ModelManager:
         img_str = base64.b64encode(buffer).decode('utf-8')
         self.context.add_image(img_str)
         
-        prompt = "Analyze this image and provide guidance on the PC build process. What do you see? Are there any errors?"
+        prompt = """
+        You are analyzing a live video feed of a PC being built.
+
+        Your job is to detect meaningful changes or issues between frames.
+
+        IMPORTANT:
+        If there is NO new information, NO new mistakes, and NO actionable guidance compared to previous context, you MUST respond with exactly:
+
+        empty
+
+        (no extra text, no punctuation)
+
+        Only respond with a full answer if:
+        - A new component appears
+        - A component changes position
+        - A mistake is detected
+        - The user needs to take action
+
+        If responding, use this format:
+
+        OBSERVATION:
+        What changed or what is currently visible
+
+        ISSUES:
+        What is wrong or risky (if any)
+
+        ACTION:
+        Clear step-by-step instructions
+
+        Be concise and only respond when necessary.
+        """
         self.context.add_message("user", prompt)
         
         response = await self._query_model()
