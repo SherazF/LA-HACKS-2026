@@ -7,6 +7,7 @@ help:
 	@echo "  make run-backend   - API server (backend/.venv python main.py)"
 	@echo "  make run-frontend  - Electron app (npm start in frontend/)"
 	@echo "  make install       - Install dependencies"
+	@echo "  make run           - Run both backend and frontend"
 
 install:
 	cd backend && python3 -m venv venv
@@ -18,3 +19,6 @@ run-backend:
 
 run-frontend:
 	cd frontend && npm start
+
+run:
+	make run-backend & make run-frontend
