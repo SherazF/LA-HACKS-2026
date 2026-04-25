@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import httpx
-import json
 import base64
 import cv2
 from typing import Dict, List, Optional
 from bus import EventBus
+from web import WEB_SYSTEM_SUFFIX, chat_with_internet_tools
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,10 @@ class ModelManager:
         self.model_name = model_name
         self.queue = asyncio.PriorityQueue()
         self.chat_history: List[Dict] = []
-        self.system_prompt = "You are a PC build guide assistant. Help the user build their PC based on the camera feed and chat."
+        self.system_prompt = (
+            "You are a PC build guide assistant. Help the user build their PC based on the camera feed and chat."
+            + WEB_SYSTEM_SUFFIX
+        )
         self.turn_count = 0
         self.compression_threshold = 10
         self.processing_lock = asyncio.Lock()
@@ -88,7 +92,7 @@ class ModelManager:
 
     async def _process_chat(self, text: str):
         self.chat_history.append({"role": "user", "content": text})
-        response = await self._query_model(text)
+        response = await self._query_model_chat()
         if response:
             self.chat_history.append({"role": "assistant", "content": response})
             await self.bus.emit("chat_response", text=response)
@@ -106,6 +110,19 @@ class ModelManager:
             await self.bus.emit("vision_result", text=response)
         self.turn_count += 1
         await self._check_compression()
+
+    async def _query_model_chat(self) -> Optional[str]:
+        """Text chat with optional fetch_url tool loop (Ollama tool calling)."""
+        messages: List[Dict] = [
+            {"role": "system", "content": self.system_prompt},
+            *self.chat_history,
+        ]
+        return await chat_with_internet_tools(
+            self.ollama_url,
+            self.model_name,
+            messages,
+            httpx_timeout=120.0,
+        )
 
     async def _query_model(self, prompt: str, images: Optional[List[str]] = None) -> Optional[str]:
         payload = {
