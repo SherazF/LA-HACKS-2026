@@ -1,0 +1,50 @@
+# --- Node.js / Electron ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+release/
+.eslintcache
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- OS Specific ---
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Cursor / IDEs ---
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs & Misc ---
+*.log
+api_key.txt
+config.json

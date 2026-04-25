@@ -1,0 +1,15 @@
+{
+  "name": "pc-build-ai-assistant",
+  "version": "1.0.0",
+  "description": "Standalone Electron desktop app for PC build AI assistance",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^41.3.0"
+  }
+}
