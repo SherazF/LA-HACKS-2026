@@ -4,19 +4,41 @@ import httpx
 import json
 import base64
 import cv2
+import os
+from datetime import datetime
 from typing import Dict, List, Optional
 from bus import EventBus
 
 logger = logging.getLogger(__name__)
 
 class ModelManager:
-    def __init__(self, bus: EventBus, ollama_url: str = "http://localhost:11434", model_name: str = "gemma"):
+    def __init__(self, bus: EventBus, ollama_url: str = "http://localhost:11434", model_name: str = "gemma", 
+                 input_dir: str = "inputs", output_dir: str = "outputs"):
         self.bus = bus
         self.ollama_url = ollama_url.rstrip('/')
         self.model_name = model_name
         self.queue = asyncio.PriorityQueue()
         self.chat_history: List[Dict] = []
-        self.system_prompt = "You are a PC build guide assistant. Help the user build their PC based on the camera feed and chat."
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        
+        # Create directories if they don't exist
+        os.makedirs(self.input_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Enhanced system prompt for better structured markdown output
+        self.system_prompt = """You are a helpful assistant that provides clear, step-by-step guidance.
+
+IMPORTANT: Format all responses as clean, professional Markdown with:
+- Clear headings (## for main sections, ### for subsections)
+- Numbered steps for procedures
+- Bullet points for lists and details
+- Code blocks (```language ... ```) for commands or code
+- Bold for important terms (**bold**)
+- Proper spacing between sections
+
+Always structure your response to be easy to read and follow, with clear organization and proper Markdown formatting."""
+        
         self.turn_count = 0
         self.compression_threshold = 10
         self.processing_lock = asyncio.Lock()
@@ -40,6 +62,130 @@ class ModelManager:
                     logger.error(f"Ollama server at {self.ollama_url} returned status {response.status_code}")
         except Exception as e:
             logger.error(f"Could not connect to Ollama at {self.ollama_url}: {e}")
+
+    def read_input_file(self, filename: str = "input.txt") -> Optional[str]:
+        """Read input from a .txt file."""
+        filepath = os.path.join(self.input_dir, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            if content:
+                logger.info(f"Successfully read input from {filepath}")
+                return content
+            else:
+                logger.warning(f"Input file is empty: {filepath}")
+                return None
+        except FileNotFoundError:
+            logger.error(f"Input file not found: {filepath}")
+            return None
+        except Exception as e:
+            logger.error(f"Error reading input file: {e}")
+            return None
+
+    def write_output_file(self, content: str, filename: Optional[str] = None) -> str:
+        """Write formatted output to a .md file."""
+        if filename is None:
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"output_{timestamp}.md"
+        
+        filepath = os.path.join(self.output_dir, filename)
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info(f"Successfully wrote output to {filepath}")
+            return filepath
+        except Exception as e:
+            logger.error(f"Error writing output file: {e}")
+            return None
+
+    async def process_file_input(self, input_filename: str = "input.txt", 
+                                 output_filename: Optional[str] = None) -> Dict:
+        """Process file-based input and generate formatted markdown output."""
+        logger.info(f"Starting file-based input processing")
+        
+        # Read input
+        prompt = self.read_input_file(input_filename)
+        if not prompt:
+            error_msg = f"Could not read input from {input_filename}"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+        
+        # Query model
+        response = await self._query_model_for_file(prompt)
+        if not response:
+            error_msg = "Model returned empty response"
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+        
+        # Format and write output
+        formatted_output = self._format_markdown_output(prompt, response)
+        output_path = self.write_output_file(formatted_output, output_filename)
+        
+        if output_path:
+            return {
+                "success": True,
+                "input_file": os.path.join(self.input_dir, input_filename),
+                "output_file": output_path,
+                "prompt": prompt,
+                "response": response
+            }
+        else:
+            return {"success": False, "error": "Failed to write output file"}
+
+    def _format_markdown_output(self, prompt: str, response: str) -> str:
+        """Format the output with metadata and proper markdown structure."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Add header with metadata
+        markdown_output = f"""# Generated Output
+
+**Generated:** {timestamp}  
+**Model:** {self.model_name}
+
+---
+
+## Input Prompt
+
+{prompt}
+
+---
+
+## Response
+
+{response}
+
+---
+
+*Generated by Gemma Model Manager*
+"""
+        return markdown_output
+
+    async def _query_model_for_file(self, prompt: str) -> Optional[str]:
+        """Query the model without chat history (for file-based processing)."""
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.ollama_url}/api/chat", json=payload)
+                if response.status_code == 404:
+                    logger.error(f"404 Not Found: Does the model '{self.model_name}' exist on the server?")
+                    return None
+                response.raise_for_status()
+                result = response.json()
+                return result.get("message", {}).get("content", "")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Error querying model: {e}")
+            return None
 
     async def on_snapshot_ready(self, frame):
         await self.queue.put((1, {"type": "snapshot", "frame": frame}))

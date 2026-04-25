@@ -1,0 +1,22 @@
+Write a comprehensive step-by-step guide for building a PC for gaming.
+
+Please include:
+1. CPU Selection Tips - how to choose the right processor
+2. GPU Recommendations - graphics cards for different budgets
+3. RAM Requirements - how much memory you need
+4. Motherboard Considerations - key factors in selection
+5. Power Supply Sizing - calculating adequate PSU wattage
+6. Storage Configuration - SSD vs HDD recommendations
+7. Cooling Solutions - air cooling vs liquid cooling
+8. Assembly Process - building the PC step-by-step
+9. BIOS Configuration - initial setup steps
+10. Testing and Troubleshooting - how to verify everything works
+
+Format this as a beginner-friendly guide with:
+- Clear numbered sections
+- Bullet points for key considerations
+- Code blocks for commands or specifications
+- Important tips highlighted in bold
+- A conclusion with next steps
+
+Make it practical and easy to follow for someone building their first gaming PC.

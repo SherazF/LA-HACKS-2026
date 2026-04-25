@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket
@@ -107,6 +107,11 @@ class AnalyzeRequest(BaseModel):
     image: str = Field(..., description="Data URL or base64 image from the client")
 
 
+class FileProcessRequest(BaseModel):
+    input_filename: str = Field(default="input.txt", description="Name of the input .txt file in the inputs/ directory")
+    output_filename: Optional[str] = Field(default=None, description="Optional custom output filename (will use timestamp if not provided)")
+
+
 @app.get("/health")
 async def health():
     return {"ok": True}
@@ -117,6 +122,17 @@ async def analyze(req: AnalyzeRequest):
     # Placeholder for a future vision / detection pipeline; keeps Electron compatibility.
     _ = req.image
     return {"boxes": []}
+
+
+@app.post("/process-file")
+async def process_file(req: FileProcessRequest):
+    """Process a .txt input file and generate a formatted .md output file."""
+    model_manager: ModelManager = app.state.model_manager
+    result = await model_manager.process_file_input(
+        input_filename=req.input_filename,
+        output_filename=req.output_filename
+    )
+    return result
 
 
 @app.websocket("/ws")
