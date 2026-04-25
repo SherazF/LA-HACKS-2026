@@ -9,7 +9,8 @@ help:
 	@echo "  make install       - Install dependencies"
 
 install:
-	cd backend && .venv/bin/pip install -r requirements.txt && \
+	cd backend && python3 -m venv venv
+	cd backend && venv/bin/pip install -r requirements.txt
 	cd ../frontend && npm install
 
 run-backend:
