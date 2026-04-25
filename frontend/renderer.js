@@ -1,3 +1,14 @@
+const API_BASE = "http://127.0.0.1:8000";
+const WS_PATH = "/ws";
+const wsUrl = () => {
+  const u = new URL(API_BASE);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  u.pathname = WS_PATH;
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+};
+
 const video = document.getElementById("webcam");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
@@ -12,11 +23,14 @@ const chatPanel = document.getElementById("chat-panel");
 let isProcessing = false;
 let lastDetections = [];
 let isListening = false;
-let backendOnline = true;
+let backendOnline = false;
 let lastPulseFrame = 0;
+let hasLoggedOfflineWarning = false;
+let socket = null;
+let lastObjectUrl = null;
+let pingIntervalId = 0;
+let reconnectTimer = 0;
 let pendingUserAnalyses = 0;
-let cameraUnavailable = false;
-
 const ANALYSIS_TIMEOUT_MS = 45000;
 
 const offlineBadge = document.createElement("div");
@@ -24,7 +38,21 @@ offlineBadge.id = "offline-badge";
 offlineBadge.textContent = "System Offline";
 chatPanel.appendChild(offlineBadge);
 
-function setSystemStatus(online) {
+function feedWidth() {
+  if (video.tagName === "IMG") {
+    return video.naturalWidth || 0;
+  }
+  return video.videoWidth || 0;
+}
+
+function feedHeight() {
+  if (video.tagName === "IMG") {
+    return video.naturalHeight || 0;
+  }
+  return video.videoHeight || 0;
+}
+
+function setStatus(online) {
   statusEl.textContent = online ? "System: Standby" : "System: Offline";
   statusEl.classList.toggle("offline", !online);
 }
@@ -37,6 +65,9 @@ function setProcessingState(value) {
   isProcessing = value;
   chatPanel.classList.toggle("loading", value);
   voiceBtn.classList.toggle("thinking", value);
+  if (value) {
+    voiceBtn.classList.remove("pulse");
+  }
 }
 
 function setListeningState(value) {
@@ -55,75 +86,173 @@ function appendMessage(role, text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function flushPendingUserAnalysis() {
-  if (isProcessing || !video.videoWidth || !video.videoHeight || pendingUserAnalyses < 1) {
+function handleWsText(raw) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  const t = msg.type;
+  if (t === "pong" || t === "status") {
+    if (t === "status" && msg.message && msg.message !== "ready") {
+      appendMessage("assistant", msg.message);
+    }
+    return;
+  }
+  if (t === "error" && msg.message) {
+    appendMessage("assistant", `Error: ${msg.message}`);
+    return;
+  }
+  if (t === "chat_response" && typeof msg.text === "string") {
+    appendMessage("assistant", msg.text);
+    return;
+  }
+  if (t === "vision_result" && typeof msg.text === "string") {
+    appendMessage("assistant", `[Vision] ${msg.text}`);
+  }
+}
+
+function setFeedFromBlob(blob) {
+  if (lastObjectUrl) {
+    URL.revokeObjectURL(lastObjectUrl);
+  }
+  lastObjectUrl = URL.createObjectURL(blob);
+  video.src = lastObjectUrl;
+}
+
+function connectWebSocket() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = 0;
+  }
+  if (pingIntervalId) {
+    clearInterval(pingIntervalId);
+    pingIntervalId = 0;
+  }
+  if (socket) {
+    try {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+    } catch {
+      // ignore
+    }
+    socket = null;
+  }
+
+  try {
+    socket = new WebSocket(wsUrl());
+  } catch (e) {
+    console.error("WebSocket create failed", e);
+    scheduleReconnect();
     return;
   }
 
-  pendingUserAnalyses -= 1;
-  analyzeFrame({ userInitiated: true });
-}
+  socket.onopen = () => {
+    backendOnline = true;
+    setStatus(true);
+    updateOfflineBadge();
+    hasLoggedOfflineWarning = false;
+    pingIntervalId = window.setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ v: 1, type: "ping" }));
+      }
+    }, 25_000);
+  };
 
-function getOverlaySize() {
-  return {
-    width: Math.max(1, Math.round(overlay.offsetWidth || window.innerWidth)),
-    height: Math.max(1, Math.round(overlay.offsetHeight || window.innerHeight))
+  socket.onmessage = (event) => {
+    if (typeof event.data === "string") {
+      handleWsText(event.data);
+      return;
+    }
+    if (event.data instanceof Blob) {
+      setFeedFromBlob(event.data);
+      backendOnline = true;
+      setStatus(true);
+      updateOfflineBadge();
+      return;
+    }
+    if (event.data instanceof ArrayBuffer) {
+      setFeedFromBlob(new Blob([event.data], { type: "image/jpeg" }));
+      backendOnline = true;
+      setStatus(true);
+      updateOfflineBadge();
+    }
+  };
+
+  socket.onerror = () => {
+    if (!hasLoggedOfflineWarning) {
+      console.warn("WebSocket error");
+    }
+  };
+
+  socket.onclose = () => {
+    if (pingIntervalId) {
+      clearInterval(pingIntervalId);
+      pingIntervalId = 0;
+    }
+    socket = null;
+    backendOnline = false;
+    setStatus(false);
+    updateOfflineBadge();
+    scheduleReconnect();
   };
 }
 
-function syncOverlayCanvas() {
-  const { width, height } = getOverlaySize();
-  const pixelRatio = window.devicePixelRatio || 1;
-  const targetWidth = Math.round(width * pixelRatio);
-  const targetHeight = Math.round(height * pixelRatio);
-
-  if (overlay.width !== targetWidth || overlay.height !== targetHeight) {
-    overlay.width = targetWidth;
-    overlay.height = targetHeight;
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    return;
   }
-
-  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  return { width, height };
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = 0;
+    connectWebSocket();
+  }, 2000);
 }
 
 function resizeOverlay() {
-  syncOverlayCanvas();
+  overlay.width = window.innerWidth;
+  overlay.height = window.innerHeight;
   drawBoxes(lastDetections);
-  flushPendingUserAnalysis();
 }
 
-function getRenderedVideoRect(overlayWidth, overlayHeight) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+function getRenderedVideoRect() {
+  const vw = feedWidth();
+  const vh = feedHeight();
+  const cw = overlay.width;
+  const ch = overlay.height;
 
-  if (!vw || !vh || !overlayWidth || !overlayHeight) {
+  if (!vw || !vh || !cw || !ch) {
     return null;
   }
 
-  const scale = Math.max(overlayWidth / vw, overlayHeight / vh);
+  const scale = Math.max(cw / vw, ch / vh);
   const renderWidth = vw * scale;
   const renderHeight = vh * scale;
-  const offsetX = (overlayWidth - renderWidth) / 2;
-  const offsetY = (overlayHeight - renderHeight) / 2;
+  const offsetX = (cw - renderWidth) / 2;
+  const offsetY = (ch - renderHeight) / 2;
 
   return { offsetX, offsetY, renderWidth, renderHeight };
 }
 
 function drawBoxes(detections = []) {
-  const { width: overlayWidth, height: overlayHeight } = syncOverlayCanvas();
-  ctx.clearRect(0, 0, overlayWidth, overlayHeight);
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
   if (!detections.length) {
     return;
   }
 
-  const rect = getRenderedVideoRect(overlayWidth, overlayHeight);
+  const rect = getRenderedVideoRect();
   if (!rect) {
     return;
   }
 
+  const w = feedWidth();
+  const h = feedHeight();
   const { offsetX, offsetY, renderWidth, renderHeight } = rect;
-  const scaleX = renderWidth / video.videoWidth;
-  const scaleY = renderHeight / video.videoHeight;
+  const scaleX = renderWidth / w;
+  const scaleY = renderHeight / h;
 
   const t = performance.now() / 1000;
   const pulse = 0.6 + ((Math.sin(t * 3.8) + 1) / 2) * 0.4;
@@ -152,29 +281,9 @@ function drawBoxes(detections = []) {
   }
 }
 
-async function initWebcam() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    cameraUnavailable = false;
-    setSystemStatus(true);
-    appendMessage("assistant", "Webcam connected. Ready to analyze your build.");
-    flushPendingUserAnalysis();
-  } catch (error) {
-    cameraUnavailable = true;
-    pendingUserAnalyses = 0;
-    setSystemStatus(false);
-    appendMessage("assistant", "Camera unavailable.");
-  }
-}
-
 function buildFrameData() {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const vw = feedWidth();
+  const vh = feedHeight();
   if (!vw || !vh) {
     return null;
   }
@@ -198,8 +307,8 @@ function buildFrameData() {
 }
 
 function normalizeDetections(detections, sourceWidth, sourceHeight) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const vw = feedWidth();
+  const vh = feedHeight();
   if (!vw || !vh || !sourceWidth || !sourceHeight) {
     return detections;
   }
@@ -223,6 +332,14 @@ function normalizeDetections(detections, sourceWidth, sourceHeight) {
   });
 }
 
+function flushPendingUserAnalysis() {
+  if (isProcessing || pendingUserAnalyses < 1) {
+    return;
+  }
+  pendingUserAnalyses -= 1;
+  queueMicrotask(() => analyzeFrame({ userInitiated: true }));
+}
+
 async function analyzeFrame(options = {}) {
   const { userInitiated = false } = options;
 
@@ -233,14 +350,9 @@ async function analyzeFrame(options = {}) {
     return;
   }
 
-  if (!video.videoWidth || !video.videoHeight) {
+  if (!feedWidth() || !feedHeight()) {
     if (userInitiated) {
-      if (cameraUnavailable) {
-        setSystemStatus(false);
-        appendMessage("assistant", "Camera unavailable.");
-      } else {
-        pendingUserAnalyses += 1;
-      }
+      pendingUserAnalyses += 1;
     }
     return;
   }
@@ -255,12 +367,13 @@ async function analyzeFrame(options = {}) {
 
   setProcessingState(true);
   try {
-    const response = await fetch("http://localhost:8000/analyze", {
+    const response = await fetch(`${API_BASE}/analyze`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: frame.dataUrl }),
       signal: controller.signal
     });
+    hasLoggedOfflineWarning = false;
 
     if (!response.ok) {
       throw new Error(`Backend returned ${response.status}`);
@@ -274,19 +387,21 @@ async function analyzeFrame(options = {}) {
         : [];
 
     lastDetections = normalizeDetections(detections, frame.width, frame.height);
-    backendOnline = true;
-    updateOfflineBadge();
-    setSystemStatus(true);
     drawBoxes(lastDetections);
   } catch (error) {
-    lastDetections = [];
-    backendOnline = false;
-    updateOfflineBadge();
-    setSystemStatus(false);
-    drawBoxes(lastDetections);
-    if (userInitiated) {
-      appendMessage("assistant", "System: Offline");
+    if (error && error.name === "AbortError") {
+      lastDetections = [];
+    } else {
+      if (!hasLoggedOfflineWarning) {
+        console.warn("Analyze request failed (HTTP)", error);
+        hasLoggedOfflineWarning = true;
+      }
+      lastDetections = [];
+      if (userInitiated) {
+        appendMessage("assistant", "System: Offline");
+      }
     }
+    drawBoxes(lastDetections);
   } finally {
     window.clearTimeout(timeoutId);
     setProcessingState(false);
@@ -349,9 +464,13 @@ function sendMessage() {
   if (!text) {
     return;
   }
-  appendMessage("user", text);
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    appendMessage("assistant", "Not connected to the backend. Is the API running on port 8000?");
+    return;
+  }
   inputEl.value = "";
-  analyzeFrame({ userInitiated: true });
+  appendMessage("user", text);
+  socket.send(JSON.stringify({ v: 1, type: "chat", text }));
 }
 
 function animateOverlay(now) {
@@ -363,14 +482,16 @@ function animateOverlay(now) {
 }
 
 window.addEventListener("resize", resizeOverlay);
-video.addEventListener("loadedmetadata", resizeOverlay);
-video.addEventListener("play", resizeOverlay);
+video.addEventListener("load", resizeOverlay);
+video.addEventListener("error", () => {
+  setStatus(!!(socket && socket.readyState === WebSocket.OPEN));
+});
 
 setupChat();
 setupVoiceInput();
-setSystemStatus(true);
+setStatus(false);
 setListeningState(false);
-initWebcam();
 updateOfflineBadge();
+connectWebSocket();
 requestAnimationFrame(animateOverlay);
-setInterval(analyzeFrame, 3000);
+setInterval(() => analyzeFrame({ userInitiated: false }), 3000);

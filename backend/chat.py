@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+
 import aioconsole
 from bus import EventBus
 
@@ -18,6 +20,8 @@ class ChatManager:
         await aioconsole.aprint(f"\n[Gemma Chat]: {text}\n> ", end="")
 
     async def start(self):
+        if os.getenv("ENABLE_CONSOLE_CHAT", "0").lower() not in ("1", "true", "yes"):
+            return
         await aioconsole.aprint("Chat Manager started. Type your message and press Enter. (Type 'quit' to exit)")
         while True:
             try:
