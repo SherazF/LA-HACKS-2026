@@ -1,3 +1,14 @@
+const API_BASE = "http://127.0.0.1:8000";
+const WS_PATH = "/ws";
+const wsUrl = () => {
+  const u = new URL(API_BASE);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  u.pathname = WS_PATH;
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+};
+
 const video = document.getElementById("webcam");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
@@ -12,14 +23,32 @@ const chatPanel = document.getElementById("chat-panel");
 let isProcessing = false;
 let lastDetections = [];
 let isListening = false;
-let backendOnline = true;
+let backendOnline = false;
 let lastPulseFrame = 0;
 let hasLoggedOfflineWarning = false;
+let socket = null;
+let lastObjectUrl = null;
+let pingIntervalId = 0;
+let reconnectTimer = 0;
 
 const offlineBadge = document.createElement("div");
 offlineBadge.id = "offline-badge";
 offlineBadge.textContent = "System Offline";
 chatPanel.appendChild(offlineBadge);
+
+function feedWidth() {
+  if (video.tagName === "IMG") {
+    return video.naturalWidth || 0;
+  }
+  return video.videoWidth || 0;
+}
+
+function feedHeight() {
+  if (video.tagName === "IMG") {
+    return video.naturalHeight || 0;
+  }
+  return video.videoHeight || 0;
+}
 
 function setStatus(online) {
   statusEl.textContent = online ? "Online" : "Offline";
@@ -53,6 +82,132 @@ function appendMessage(role, text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+function handleWsText(raw) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  const t = msg.type;
+  if (t === "pong" || t === "status") {
+    if (t === "status" && msg.message && msg.message !== "ready") {
+      appendMessage("assistant", msg.message);
+    }
+    return;
+  }
+  if (t === "error" && msg.message) {
+    appendMessage("assistant", `Error: ${msg.message}`);
+    return;
+  }
+  if (t === "chat_response" && typeof msg.text === "string") {
+    appendMessage("assistant", msg.text);
+    return;
+  }
+  if (t === "vision_result" && typeof msg.text === "string") {
+    appendMessage("assistant", `[Vision] ${msg.text}`);
+  }
+}
+
+function setFeedFromBlob(blob) {
+  if (lastObjectUrl) {
+    URL.revokeObjectURL(lastObjectUrl);
+  }
+  lastObjectUrl = URL.createObjectURL(blob);
+  video.src = lastObjectUrl;
+}
+
+function connectWebSocket() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = 0;
+  }
+  if (pingIntervalId) {
+    clearInterval(pingIntervalId);
+    pingIntervalId = 0;
+  }
+  if (socket) {
+    try {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+    } catch {
+      // ignore
+    }
+    socket = null;
+  }
+
+  try {
+    socket = new WebSocket(wsUrl());
+  } catch (e) {
+    console.error("WebSocket create failed", e);
+    scheduleReconnect();
+    return;
+  }
+
+  socket.onopen = () => {
+    backendOnline = true;
+    setStatus(true);
+    updateOfflineBadge();
+    hasLoggedOfflineWarning = false;
+    pingIntervalId = window.setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ v: 1, type: "ping" }));
+      }
+    }, 25_000);
+  };
+
+  socket.onmessage = (event) => {
+    if (typeof event.data === "string") {
+      handleWsText(event.data);
+      return;
+    }
+    if (event.data instanceof Blob) {
+      setFeedFromBlob(event.data);
+      backendOnline = true;
+      setStatus(true);
+      updateOfflineBadge();
+      return;
+    }
+    if (event.data instanceof ArrayBuffer) {
+      setFeedFromBlob(new Blob([event.data], { type: "image/jpeg" }));
+      backendOnline = true;
+      setStatus(true);
+      updateOfflineBadge();
+    }
+  };
+
+  socket.onerror = () => {
+    if (!hasLoggedOfflineWarning) {
+      console.warn("WebSocket error");
+    }
+  };
+
+  socket.onclose = () => {
+    if (pingIntervalId) {
+      clearInterval(pingIntervalId);
+      pingIntervalId = 0;
+    }
+    socket = null;
+    backendOnline = false;
+    setStatus(false);
+    updateOfflineBadge();
+    scheduleReconnect();
+  };
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    return;
+  }
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = 0;
+    connectWebSocket();
+  }, 2000);
+}
+
 function resizeOverlay() {
   overlay.width = window.innerWidth;
   overlay.height = window.innerHeight;
@@ -60,8 +215,8 @@ function resizeOverlay() {
 }
 
 function getRenderedVideoRect() {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const vw = feedWidth();
+  const vh = feedHeight();
   const cw = overlay.width;
   const ch = overlay.height;
 
@@ -89,9 +244,11 @@ function drawBoxes(detections = []) {
     return;
   }
 
+  const w = feedWidth();
+  const h = feedHeight();
   const { offsetX, offsetY, renderWidth, renderHeight } = rect;
-  const scaleX = renderWidth / video.videoWidth;
-  const scaleY = renderHeight / video.videoHeight;
+  const scaleX = renderWidth / w;
+  const scaleY = renderHeight / h;
 
   const t = performance.now() / 1000;
   const pulse = 0.6 + ((Math.sin(t * 3.8) + 1) / 2) * 0.4;
@@ -120,25 +277,9 @@ function drawBoxes(detections = []) {
   }
 }
 
-async function initWebcam() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true
-    });
-    video.srcObject = stream;
-    await video.play();
-    setStatus(true);
-    appendMessage("assistant", "Webcam connected. Ready to analyze your build.");
-  } catch (error) {
-    setStatus(false);
-    appendMessage("assistant", "Offline");
-  }
-}
-
 function buildFrameDataUrl() {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+  const vw = feedWidth();
+  const vh = feedHeight();
   if (!vw || !vh) {
     return null;
   }
@@ -158,7 +299,7 @@ function buildFrameDataUrl() {
 }
 
 async function analyzeFrame() {
-  if (isProcessing || !video.videoWidth || !video.videoHeight) {
+  if (isProcessing || !feedWidth() || !feedHeight()) {
     return;
   }
 
@@ -169,21 +310,12 @@ async function analyzeFrame() {
 
   setProcessingState(true);
   try {
-    let response;
-    try {
-      response = await fetch("http://localhost:8000/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: frame })
-      });
-      hasLoggedOfflineWarning = false;
-    } catch (fetchError) {
-      if (!hasLoggedOfflineWarning) {
-        console.warn("Server Offline");
-        hasLoggedOfflineWarning = true;
-      }
-      throw fetchError;
-    }
+    const response = await fetch(`${API_BASE}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: frame })
+    });
+    hasLoggedOfflineWarning = false;
 
     if (!response.ok) {
       throw new Error(`Backend returned ${response.status}`);
@@ -197,18 +329,12 @@ async function analyzeFrame() {
         : [];
 
     lastDetections = detections;
-    backendOnline = true;
-    updateOfflineBadge();
-    setStatus(true);
-  } catch (error) {
-    lastDetections = [];
-    const wasOnline = backendOnline;
-    backendOnline = false;
-    updateOfflineBadge();
-    setStatus(false);
-    if (wasOnline) {
-      appendMessage("assistant", "Offline");
+  } catch (fetchError) {
+    if (!hasLoggedOfflineWarning) {
+      console.warn("Analyze request failed (HTTP)", fetchError);
+      hasLoggedOfflineWarning = true;
     }
+    lastDetections = [];
   } finally {
     setProcessingState(false);
   }
@@ -266,8 +392,13 @@ function sendMessage() {
   if (!text) {
     return;
   }
-  appendMessage("user", text);
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    appendMessage("assistant", "Not connected to the backend. Is the API running on port 8000?");
+    return;
+  }
   inputEl.value = "";
+  appendMessage("user", text);
+  socket.send(JSON.stringify({ v: 1, type: "chat", text }));
 }
 
 function animateOverlay(now) {
@@ -279,12 +410,15 @@ function animateOverlay(now) {
 }
 
 window.addEventListener("resize", resizeOverlay);
-video.addEventListener("loadedmetadata", resizeOverlay);
-video.addEventListener("play", resizeOverlay);
+video.addEventListener("load", resizeOverlay);
+video.addEventListener("error", () => {
+  setStatus(!!(socket && socket.readyState === WebSocket.OPEN));
+});
 
 setupChat();
 setupVoiceInput();
-initWebcam();
+setStatus(false);
 updateOfflineBadge();
+connectWebSocket();
 requestAnimationFrame(animateOverlay);
 setInterval(analyzeFrame, 3000);
