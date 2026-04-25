@@ -3,13 +3,20 @@ const path = require("path");
 
 function setupPermissions() {
   const defaultSession = session.defaultSession;
+  const allowedPermissions = new Set([
+    "media",
+    "camera",
+    "microphone",
+    "audio",
+    "audioCapture"
+  ]);
 
   defaultSession.setPermissionCheckHandler((webContents, permission) => {
-    return permission === "media" || permission === "camera" || permission === "microphone";
+    return allowedPermissions.has(permission);
   });
 
   defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === "media" || permission === "camera" || permission === "microphone") {
+    if (allowedPermissions.has(permission)) {
       callback(true);
       return;
     }
@@ -26,7 +33,8 @@ function createWindow() {
     backgroundColor: "#06080f",
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   });
 

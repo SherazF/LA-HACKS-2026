@@ -14,6 +14,7 @@ let lastDetections = [];
 let isListening = false;
 let backendOnline = true;
 let lastPulseFrame = 0;
+let hasLoggedOfflineWarning = false;
 
 const offlineBadge = document.createElement("div");
 offlineBadge.id = "offline-badge";
@@ -32,12 +33,16 @@ function updateOfflineBadge() {
 function setProcessingState(value) {
   isProcessing = value;
   voiceBtn.classList.toggle("thinking", value);
+  if (value) {
+    voiceBtn.classList.remove("pulse");
+  }
 }
 
 function setListeningState(value) {
   isListening = value;
   voiceBtn.classList.toggle("listening", value);
   voiceBtn.classList.toggle("show-wave", value);
+  voiceBtn.classList.toggle("pulse", value);
 }
 
 function appendMessage(role, text) {
@@ -164,11 +169,21 @@ async function analyzeFrame() {
 
   setProcessingState(true);
   try {
-    const response = await fetch("http://localhost:8000/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: frame })
-    });
+    let response;
+    try {
+      response = await fetch("http://localhost:8000/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: frame })
+      });
+      hasLoggedOfflineWarning = false;
+    } catch (fetchError) {
+      if (!hasLoggedOfflineWarning) {
+        console.warn("Server Offline");
+        hasLoggedOfflineWarning = true;
+      }
+      throw fetchError;
+    }
 
     if (!response.ok) {
       throw new Error(`Backend returned ${response.status}`);
@@ -200,31 +215,22 @@ async function analyzeFrame() {
 }
 
 function setupChat() {
-  const send = () => {
-    const text = inputEl.value.trim();
-    if (!text) {
-      return;
-    }
-    appendMessage("user", text);
-    inputEl.value = "";
-  };
-
-  sendBtn.addEventListener("click", send);
+  sendBtn.addEventListener("click", sendMessage);
   inputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
-      send();
+      sendMessage();
     }
   });
 }
 
 function setupVoiceInput() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
+  const SpeechRecognitionCtor = window.webkitSpeechRecognition || window.SpeechRecognition;
+  if (!SpeechRecognitionCtor) {
     voiceBtn.disabled = true;
     return;
   }
 
-  const recognition = new SpeechRecognition();
+  const recognition = new SpeechRecognitionCtor();
   recognition.lang = "en-US";
   recognition.interimResults = false;
   recognition.continuous = false;
@@ -233,15 +239,13 @@ function setupVoiceInput() {
     const transcript = event.results[0][0].transcript.trim();
     if (transcript) {
       inputEl.value = transcript;
-      appendMessage("user", transcript);
-      inputEl.value = "";
+      sendMessage();
     }
   });
 
-  recognition.addEventListener("error", () => {
+  recognition.addEventListener("error", (error) => {
     setListeningState(false);
-    appendMessage("assistant", "Offline");
-    setStatus(false);
+    console.error("Speech recognition error:", error);
   });
 
   recognition.addEventListener("end", () => {
@@ -249,9 +253,21 @@ function setupVoiceInput() {
   });
 
   voiceBtn.addEventListener("click", () => {
+    if (isProcessing || isListening) {
+      return;
+    }
     setListeningState(true);
     recognition.start();
   });
+}
+
+function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text) {
+    return;
+  }
+  appendMessage("user", text);
+  inputEl.value = "";
 }
 
 function animateOverlay(now) {
