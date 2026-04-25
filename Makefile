@@ -11,7 +11,7 @@ help:
 install:
 	cd backend && python3 -m venv venv
 	cd backend && venv/bin/pip install -r requirements.txt
-	cd ../frontend && npm install
+	cd frontend && npm install
 
 run-backend:
 	cd backend && .venv/bin/python main.py
