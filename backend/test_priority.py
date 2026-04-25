@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from unittest.mock import MagicMock, AsyncMock
 from bus import EventBus
-from gemma import ModelManager
+from model.gemma import ModelManager
 
 class TestPriority(unittest.IsolatedAsyncioTestCase):
     async def test_priority_processing(self):

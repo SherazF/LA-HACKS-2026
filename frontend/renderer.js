@@ -493,5 +493,9 @@ setStatus(false);
 setListeningState(false);
 updateOfflineBadge();
 connectWebSocket();
+
+// Initial welcome message
+appendMessage("assistant", "System initialized. Please describe your current build status or what you're working on to begin.");
+
 requestAnimationFrame(animateOverlay);
 setInterval(() => analyzeFrame({ userInitiated: false }), 3000);

@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import httpx
-import json
 import base64
 import cv2
+import os
 from typing import Dict, List, Optional
 from bus import EventBus
+from .context import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -15,45 +16,54 @@ class ModelManager:
         self.ollama_url = ollama_url.rstrip('/')
         self.model_name = model_name
         self.queue = asyncio.PriorityQueue()
-        self.chat_history: List[Dict] = []
-        self.system_prompt = "You are a PC build guide assistant. Help the user build their PC based on the camera feed and chat."
-        self.turn_count = 0
-        self.compression_threshold = 10
+        self.context = ContextManager(image_limit=3)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
+        
+        # Load Prompts
+        self.prompt_dir = os.path.join(os.path.dirname(__file__), "prompts")
+        self.system_prompt_tpl = self._load_prompt("system_prompt.txt")
+        self.initial_request_tpl = self._load_prompt("initial_request.txt")
         
         # Subscribe to events
         self.bus.subscribe("snapshot_ready", self.on_snapshot_ready)
         self.bus.subscribe("chat_input", self.on_chat_input)
 
+    def _load_prompt(self, filename: str) -> str:
+        path = os.path.join(self.prompt_dir, filename)
+        try:
+            with open(path, 'r') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Failed to load prompt {filename}: {e}")
+            return ""
+
     async def _check_connection(self):
-        """Startup diagnostic to list models and verify URL."""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{self.ollama_url}/api/tags")
                 if response.status_code == 200:
                     models = [m['name'] for m in response.json().get('models', [])]
                     logger.info(f"Connected to Ollama. Models available: {models}")
-                    if self.model_name not in models and f"{self.model_name}:latest" not in models:
-                        logger.warning(f"Model '{self.model_name}' not found! App will likely 404. Available: {models}")
                 else:
-                    logger.error(f"Ollama server at {self.ollama_url} returned status {response.status_code}")
+                    logger.error(f"Ollama server returned status {response.status_code}")
         except Exception as e:
             logger.error(f"Could not connect to Ollama at {self.ollama_url}: {e}")
 
     async def on_snapshot_ready(self, frame):
+        if not self.context.is_initialized:
+            # Don't queue snapshots until we have an initial context from the user
+            return
         await self.queue.put((1, {"type": "snapshot", "frame": frame}))
 
     async def on_chat_input(self, text):
-        # Priority 0 for chat (preempts snapshots)
         await self.queue.put((0, {"type": "chat", "text": text}))
-        # Cancel current task if it's a snapshot/vision task
         if self.current_task and not self.current_task.done():
             logger.info("Chat preempting in-flight vision task...")
             self.current_task.cancel()
 
     async def start(self):
-        logger.info(f"Model Manager started (Model: {self.model_name})")
+        logger.info(f"Model Manager (Modular) started (Model: {self.model_name})")
         await self._check_connection()
         
         while True:
@@ -64,7 +74,6 @@ class ModelManager:
                     if item["type"] == "chat":
                         await self._process_chat(item["text"])
                     elif item["type"] == "snapshot":
-                        # Pre-check preemption
                         if not self.queue.empty():
                             next_prio, _ = self.queue._queue[0]
                             if next_prio < priority:
@@ -87,41 +96,53 @@ class ModelManager:
                 await asyncio.sleep(0.1)
 
     async def _process_chat(self, text: str):
-        self.chat_history.append({"role": "user", "content": text})
-        response = await self._query_model(text)
+        prompt = text
+        if not self.context.is_initialized:
+            logger.info("First chat message: Initializing build state")
+            prompt = self.initial_request_tpl.format(user_input=text)
+            self.context.is_initialized = True
+        
+        self.context.add_message("user", prompt)
+        response = await self._query_model()
+        
         if response:
-            self.chat_history.append({"role": "assistant", "content": response})
+            self.context.update_state_from_text(response)
+            self.context.add_message("assistant", response)
             await self.bus.emit("chat_response", text=response)
-        self.turn_count += 1
-        await self._check_compression()
 
     async def _process_snapshot(self, frame):
+        # Convert frame to base64
         _, buffer = cv2.imencode('.jpg', frame)
         img_str = base64.b64encode(buffer).decode('utf-8')
+        self.context.add_image(img_str)
         
         prompt = "Analyze this image and provide guidance on the PC build process. What do you see? Are there any errors?"
-        response = await self._query_model(prompt, images=[img_str])
+        self.context.add_message("user", prompt)
+        
+        response = await self._query_model()
         
         if response:
+            self.context.update_state_from_text(response)
+            self.context.add_message("assistant", response)
             await self.bus.emit("vision_result", text=response)
-        self.turn_count += 1
-        await self._check_compression()
 
-    async def _query_model(self, prompt: str, images: Optional[List[str]] = None) -> Optional[str]:
+    async def _query_model(self) -> Optional[str]:
+        formatted_state = self.context.get_formatted_state()
+        system_prompt = self.system_prompt_tpl.format(
+            milestones=formatted_state["milestones"],
+            parts=formatted_state["parts"]
+        )
+        messages = self.context.get_messages_payload(system_prompt)
+        
         payload = {
             "model": self.model_name,
-            "messages": [{"role": "system", "content": self.system_prompt}] + self.chat_history + [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False
         }
-        if images:
-            payload["messages"][-1]["images"] = images
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(f"{self.ollama_url}/api/chat", json=payload)
-                if response.status_code == 404:
-                    logger.error(f"404 Not Found: Does the model '{self.model_name}' exist on the server?")
-                    return None
                 response.raise_for_status()
                 result = response.json()
                 return result.get("message", {}).get("content", "")
@@ -130,10 +151,3 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Error querying model: {e}")
             return None
-
-    async def _check_compression(self):
-        if self.turn_count >= self.compression_threshold:
-            logger.info("Compressing context...")
-            if len(self.chat_history) > 4:
-                self.chat_history = self.chat_history[-4:]
-            self.turn_count = 0

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from bus import EventBus
 from camera import CameraStream
 from chat import ChatManager
-from gemma import ModelManager
+from model.gemma import ModelManager
 from snapshot import SnapshotManager
 from ui import UIManager
 from ws_bridge import ConnectionManager, WebSocketBridge, handle_websocket, run_camera_frame_stream

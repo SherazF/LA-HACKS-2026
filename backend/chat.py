@@ -22,7 +22,7 @@ class ChatManager:
     async def start(self):
         if os.getenv("ENABLE_CONSOLE_CHAT", "0").lower() not in ("1", "true", "yes"):
             return
-        await aioconsole.aprint("Chat Manager started. Type your message and press Enter. (Type 'quit' to exit)")
+        await aioconsole.aprint("Chat Manager started. Please describe your current build status to begin (e.g., 'I just unboxed the case and am ready to start').")
         while True:
             try:
                 line = await aioconsole.ainput("> ")

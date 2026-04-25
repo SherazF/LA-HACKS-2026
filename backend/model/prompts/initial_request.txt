@@ -1,0 +1,5 @@
+The user is starting their session.
+User: "{user_input}"
+
+Acknowledge the user's current situation and help them with whatever they are working on. 
+Record any initial milestones or parts mentioned in a JSON block.
