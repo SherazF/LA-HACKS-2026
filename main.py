@@ -66,7 +66,7 @@ async def async_main(args):
 def main():
     parser = argparse.ArgumentParser(description="PC Build Guidance App")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API URL")
-    parser.add_argument("--model", type=str, default="gemma", help="Model name (e.g., gemma, llava, moondream)")
+    parser.add_argument("--model", type=str, default="gemma4:e2b", help="Model name (e.g., gemma, llava, moondream)")
     parser.add_argument("--camera-index", type=int, default=0, help="Camera device index")
     parser.add_argument("--snapshot-interval", type=float, default=15.0, help="Interval between snapshots in seconds")
     args = parser.parse_args()
