@@ -1,6 +1,8 @@
 import asyncio
 import argparse
 import logging
+import os
+from dotenv import load_dotenv
 from bus import EventBus
 from camera import CameraStream
 from gemma import ModelManager
@@ -8,15 +10,22 @@ from snapshot import SnapshotManager
 from chat import ChatManager
 from ui import UIManager
 
+load_dotenv()
+OLLAMA_HOST = os.getenv("OLLAMA_HOST") or "localhost"
+OLLAMA_PORT = os.getenv("OLLAMA_PORT") or 11434
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or "gemma4:e2b"
+CAMERA_INDEX = int(os.getenv("CAMERA_INDEX") or 0)
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Main")
 
 async def async_main(args):
     bus = EventBus()
-    camera = CameraStream(camera_index=args.camera_index)
+    camera = CameraStream(camera_index=CAMERA_INDEX)
     # Pass the model name to ModelManager
-    model_manager = ModelManager(bus, ollama_url=args.ollama_url, model_name=args.model)
+    ollama_url = f'http://{OLLAMA_HOST}:{OLLAMA_PORT}'
+    model_manager = ModelManager(bus, ollama_url=ollama_url, model_name=OLLAMA_MODEL)
     snapshot_manager = SnapshotManager(bus, camera, interval=args.snapshot_interval)
     chat_manager = ChatManager(bus)
     ui_manager = UIManager(bus)
@@ -65,9 +74,6 @@ async def async_main(args):
 
 def main():
     parser = argparse.ArgumentParser(description="PC Build Guidance App")
-    parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API URL")
-    parser.add_argument("--model", type=str, default="gemma4:e2b", help="Model name (e.g., gemma, llava, moondream)")
-    parser.add_argument("--camera-index", type=int, default=0, help="Camera device index")
     parser.add_argument("--snapshot-interval", type=float, default=15.0, help="Interval between snapshots in seconds")
     args = parser.parse_args()
 
