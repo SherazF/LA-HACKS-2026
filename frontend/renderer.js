@@ -14,15 +14,18 @@ let lastDetections = [];
 let isListening = false;
 let backendOnline = true;
 let lastPulseFrame = 0;
-let hasLoggedOfflineWarning = false;
+let pendingUserAnalyses = 0;
+let cameraUnavailable = false;
+
+const ANALYSIS_TIMEOUT_MS = 45000;
 
 const offlineBadge = document.createElement("div");
 offlineBadge.id = "offline-badge";
 offlineBadge.textContent = "System Offline";
 chatPanel.appendChild(offlineBadge);
 
-function setStatus(online) {
-  statusEl.textContent = online ? "Online" : "Offline";
+function setSystemStatus(online) {
+  statusEl.textContent = online ? "System: Standby" : "System: Offline";
   statusEl.classList.toggle("offline", !online);
 }
 
@@ -32,10 +35,8 @@ function updateOfflineBadge() {
 
 function setProcessingState(value) {
   isProcessing = value;
+  chatPanel.classList.toggle("loading", value);
   voiceBtn.classList.toggle("thinking", value);
-  if (value) {
-    voiceBtn.classList.remove("pulse");
-  }
 }
 
 function setListeningState(value) {
@@ -43,6 +44,7 @@ function setListeningState(value) {
   voiceBtn.classList.toggle("listening", value);
   voiceBtn.classList.toggle("show-wave", value);
   voiceBtn.classList.toggle("pulse", value);
+  voiceBtn.setAttribute("aria-pressed", String(value));
 }
 
 function appendMessage(role, text) {
@@ -53,38 +55,68 @@ function appendMessage(role, text) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function resizeOverlay() {
-  overlay.width = window.innerWidth;
-  overlay.height = window.innerHeight;
-  drawBoxes(lastDetections);
+function flushPendingUserAnalysis() {
+  if (isProcessing || !video.videoWidth || !video.videoHeight || pendingUserAnalyses < 1) {
+    return;
+  }
+
+  pendingUserAnalyses -= 1;
+  analyzeFrame({ userInitiated: true });
 }
 
-function getRenderedVideoRect() {
+function getOverlaySize() {
+  return {
+    width: Math.max(1, Math.round(overlay.offsetWidth || window.innerWidth)),
+    height: Math.max(1, Math.round(overlay.offsetHeight || window.innerHeight))
+  };
+}
+
+function syncOverlayCanvas() {
+  const { width, height } = getOverlaySize();
+  const pixelRatio = window.devicePixelRatio || 1;
+  const targetWidth = Math.round(width * pixelRatio);
+  const targetHeight = Math.round(height * pixelRatio);
+
+  if (overlay.width !== targetWidth || overlay.height !== targetHeight) {
+    overlay.width = targetWidth;
+    overlay.height = targetHeight;
+  }
+
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  return { width, height };
+}
+
+function resizeOverlay() {
+  syncOverlayCanvas();
+  drawBoxes(lastDetections);
+  flushPendingUserAnalysis();
+}
+
+function getRenderedVideoRect(overlayWidth, overlayHeight) {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
-  const cw = overlay.width;
-  const ch = overlay.height;
 
-  if (!vw || !vh || !cw || !ch) {
+  if (!vw || !vh || !overlayWidth || !overlayHeight) {
     return null;
   }
 
-  const scale = Math.max(cw / vw, ch / vh);
+  const scale = Math.max(overlayWidth / vw, overlayHeight / vh);
   const renderWidth = vw * scale;
   const renderHeight = vh * scale;
-  const offsetX = (cw - renderWidth) / 2;
-  const offsetY = (ch - renderHeight) / 2;
+  const offsetX = (overlayWidth - renderWidth) / 2;
+  const offsetY = (overlayHeight - renderHeight) / 2;
 
   return { offsetX, offsetY, renderWidth, renderHeight };
 }
 
 function drawBoxes(detections = []) {
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const { width: overlayWidth, height: overlayHeight } = syncOverlayCanvas();
+  ctx.clearRect(0, 0, overlayWidth, overlayHeight);
   if (!detections.length) {
     return;
   }
 
-  const rect = getRenderedVideoRect();
+  const rect = getRenderedVideoRect(overlayWidth, overlayHeight);
   if (!rect) {
     return;
   }
@@ -124,19 +156,23 @@ async function initWebcam() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: true,
-      audio: true
+      audio: false
     });
     video.srcObject = stream;
     await video.play();
-    setStatus(true);
+    cameraUnavailable = false;
+    setSystemStatus(true);
     appendMessage("assistant", "Webcam connected. Ready to analyze your build.");
+    flushPendingUserAnalysis();
   } catch (error) {
-    setStatus(false);
-    appendMessage("assistant", "Offline");
+    cameraUnavailable = true;
+    pendingUserAnalyses = 0;
+    setSystemStatus(false);
+    appendMessage("assistant", "Camera unavailable.");
   }
 }
 
-function buildFrameDataUrl() {
+function buildFrameData() {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (!vw || !vh) {
@@ -154,36 +190,77 @@ function buildFrameDataUrl() {
   const bufferCtx = bufferCanvas.getContext("2d");
   bufferCtx.drawImage(video, 0, 0, targetWidth, targetHeight);
 
-  return bufferCanvas.toDataURL("image/jpeg", 0.82);
+  return {
+    dataUrl: bufferCanvas.toDataURL("image/jpeg", 0.82),
+    width: targetWidth,
+    height: targetHeight
+  };
 }
 
-async function analyzeFrame() {
-  if (isProcessing || !video.videoWidth || !video.videoHeight) {
+function normalizeDetections(detections, sourceWidth, sourceHeight) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh || !sourceWidth || !sourceHeight) {
+    return detections;
+  }
+
+  const scaleX = vw / sourceWidth;
+  const scaleY = vh / sourceHeight;
+
+  return detections.map((item) => {
+    const x = Number(item.x ?? item.left ?? 0);
+    const y = Number(item.y ?? item.top ?? 0);
+    const width = Number(item.width ?? item.w ?? 0);
+    const height = Number(item.height ?? item.h ?? 0);
+
+    return {
+      ...item,
+      x: x * scaleX,
+      y: y * scaleY,
+      width: width * scaleX,
+      height: height * scaleY
+    };
+  });
+}
+
+async function analyzeFrame(options = {}) {
+  const { userInitiated = false } = options;
+
+  if (isProcessing) {
+    if (userInitiated) {
+      pendingUserAnalyses += 1;
+    }
     return;
   }
 
-  const frame = buildFrameDataUrl();
+  if (!video.videoWidth || !video.videoHeight) {
+    if (userInitiated) {
+      if (cameraUnavailable) {
+        setSystemStatus(false);
+        appendMessage("assistant", "Camera unavailable.");
+      } else {
+        pendingUserAnalyses += 1;
+      }
+    }
+    return;
+  }
+
+  const frame = buildFrameData();
   if (!frame) {
     return;
   }
 
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+
   setProcessingState(true);
   try {
-    let response;
-    try {
-      response = await fetch("http://localhost:8000/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: frame })
-      });
-      hasLoggedOfflineWarning = false;
-    } catch (fetchError) {
-      if (!hasLoggedOfflineWarning) {
-        console.warn("Server Offline");
-        hasLoggedOfflineWarning = true;
-      }
-      throw fetchError;
-    }
+    const response = await fetch("http://localhost:8000/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: frame.dataUrl }),
+      signal: controller.signal
+    });
 
     if (!response.ok) {
       throw new Error(`Backend returned ${response.status}`);
@@ -196,21 +273,24 @@ async function analyzeFrame() {
         ? payload.detections
         : [];
 
-    lastDetections = detections;
+    lastDetections = normalizeDetections(detections, frame.width, frame.height);
     backendOnline = true;
     updateOfflineBadge();
-    setStatus(true);
+    setSystemStatus(true);
+    drawBoxes(lastDetections);
   } catch (error) {
     lastDetections = [];
-    const wasOnline = backendOnline;
     backendOnline = false;
     updateOfflineBadge();
-    setStatus(false);
-    if (wasOnline) {
-      appendMessage("assistant", "Offline");
+    setSystemStatus(false);
+    drawBoxes(lastDetections);
+    if (userInitiated) {
+      appendMessage("assistant", "System: Offline");
     }
   } finally {
+    window.clearTimeout(timeoutId);
     setProcessingState(false);
+    flushPendingUserAnalysis();
   }
 }
 
@@ -236,16 +316,15 @@ function setupVoiceInput() {
   recognition.continuous = false;
 
   recognition.addEventListener("result", (event) => {
-    const transcript = event.results[0][0].transcript.trim();
+    const transcript = event.results?.[0]?.[0]?.transcript?.trim() || "";
     if (transcript) {
       inputEl.value = transcript;
       sendMessage();
     }
   });
 
-  recognition.addEventListener("error", (error) => {
+  recognition.addEventListener("error", () => {
     setListeningState(false);
-    console.error("Speech recognition error:", error);
   });
 
   recognition.addEventListener("end", () => {
@@ -257,7 +336,11 @@ function setupVoiceInput() {
       return;
     }
     setListeningState(true);
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (error) {
+      setListeningState(false);
+    }
   });
 }
 
@@ -268,6 +351,7 @@ function sendMessage() {
   }
   appendMessage("user", text);
   inputEl.value = "";
+  analyzeFrame({ userInitiated: true });
 }
 
 function animateOverlay(now) {
@@ -284,6 +368,8 @@ video.addEventListener("play", resizeOverlay);
 
 setupChat();
 setupVoiceInput();
+setSystemStatus(true);
+setListeningState(false);
 initWebcam();
 updateOfflineBadge();
 requestAnimationFrame(animateOverlay);
