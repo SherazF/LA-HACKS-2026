@@ -196,9 +196,24 @@ class ModelManager:
             self.context.update_state(json_resp)
             self._apply_overlays_from_response(json_resp)
             response_text = (json_resp.get("response") or "").strip()
-            if response_text and response_text.lower() != "empty":
-                if self.context.add_message("assistant", response_text):
-                    await self.bus.emit("chat_response", text=response_text)
+            # Safety net: user chat MUST get a response. If the model defied
+            # the system prompt and returned "empty" anyway, fall back to a
+            # short acknowledgement so the user isn't left hanging.
+            if not response_text or response_text.lower() == "empty":
+                logger.warning(
+                    "Chat turn returned empty response; substituting fallback"
+                )
+                response_text = (
+                    "Sorry, I caught that but couldn't form a clear answer from what I'm "
+                    "seeing. Can you rephrase or move the camera a bit?"
+                )
+            if self.context.add_message("assistant", response_text):
+                await self.bus.emit("chat_response", text=response_text)
+        else:
+            fallback = (
+                "I lost the connection to the model for a moment — please try that again."
+            )
+            await self.bus.emit("chat_response", text=fallback)
 
     async def _process_snapshot(self, frame) -> None:
         """Run a transient vision turn that does not pollute chat history.
