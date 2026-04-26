@@ -17,7 +17,7 @@ class ModelManager:
         self.ollama_url = ollama_url.rstrip('/')
         self.model_name = model_name
         self.queue = asyncio.PriorityQueue()
-        self.context = ContextManager(image_limit=3)
+        self.context = ContextManager(image_limit=2)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
         self._snapshot_queued = False # Track if a snapshot is already waiting
