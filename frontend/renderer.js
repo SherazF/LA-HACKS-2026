@@ -422,39 +422,139 @@ function setupVoiceInput() {
   const SpeechRecognitionCtor = window.webkitSpeechRecognition || window.SpeechRecognition;
   if (!SpeechRecognitionCtor) {
     voiceBtn.disabled = true;
+    voiceBtn.title = "Speech recognition not supported in your browser";
     return;
   }
 
-  const recognition = new SpeechRecognitionCtor();
-  recognition.lang = "en-US";
-  recognition.interimResults = false;
-  recognition.continuous = false;
+  let recognition = null;
+  let isRecognitionActive = false;
+  let temporaryTranscript = "";
 
-  recognition.addEventListener("result", (event) => {
-    const transcript = event.results?.[0]?.[0]?.transcript?.trim() || "";
-    if (transcript) {
-      inputEl.value = transcript;
-      sendMessage();
-    }
-  });
+  function createRecognitionInstance() {
+    const rec = new SpeechRecognitionCtor();
+    rec.lang = "en-US";
+    rec.interimResults = false;
+    rec.continuous = false;
 
-  recognition.addEventListener("error", () => {
-    setListeningState(false);
-  });
+    rec.addEventListener("start", () => {
+      isRecognitionActive = true;
+      temporaryTranscript = "";
+      setListeningState(true);
+      voiceBtn.title = "Click to stop listening";
+    });
 
-  recognition.addEventListener("end", () => {
-    setListeningState(false);
-  });
+    rec.addEventListener("result", (event) => {
+      if (event.results && event.results.length > 0) {
+        const result = event.results[0];
+        if (result && result[0]) {
+          temporaryTranscript = result[0].transcript || "";
+        }
+      }
+    });
+
+    rec.addEventListener("end", () => {
+      isRecognitionActive = false;
+      setListeningState(false);
+      voiceBtn.title = "Click to start voice input";
+
+      // Insert recognized speech into input box if we got a transcript
+      if (temporaryTranscript.trim()) {
+        const currentText = inputEl.value.trim();
+        if (currentText) {
+          // Append to existing text with a space
+          inputEl.value = currentText + " " + temporaryTranscript;
+        } else {
+          // Set directly if empty
+          inputEl.value = temporaryTranscript;
+        }
+        // Clear temporary transcript
+        temporaryTranscript = "";
+      }
+    });
+
+    rec.addEventListener("error", (event) => {
+      isRecognitionActive = false;
+      setListeningState(false);
+      voiceBtn.title = "Click to start voice input";
+      temporaryTranscript = "";
+
+      // Show user-friendly error messages
+      const errorMessage = event.error || "Unknown error";
+      if (errorMessage === "network") {
+        console.warn("Speech recognition error: Network unavailable");
+        appendMessage("assistant", "Speech recognition: Network error. Please check your connection.");
+      } else if (errorMessage === "no-speech") {
+        console.warn("Speech recognition: No speech was detected. Try again.");
+      } else if (errorMessage === "permission-denied") {
+        console.warn("Speech recognition: Microphone permission denied.");
+        appendMessage("assistant", "Microphone access denied. Please allow microphone access in your browser settings.");
+      } else if (errorMessage === "not-allowed") {
+        console.warn("Speech recognition: Not allowed (likely permission denied).");
+        appendMessage("assistant", "Microphone access not allowed. Please check your browser permissions.");
+      } else {
+        console.warn(`Speech recognition error: ${errorMessage}`);
+      }
+    });
+
+    return rec;
+  }
+
+  // Initialize the recognition instance
+  recognition = createRecognitionInstance();
 
   voiceBtn.addEventListener("click", () => {
-    if (isProcessing || isListening) {
+    if (isProcessing) {
       return;
     }
-    setListeningState(true);
-    try {
-      recognition.start();
-    } catch (error) {
-      setListeningState(false);
+
+    if (isRecognitionActive) {
+      // Stop listening
+      try {
+        recognition.stop();
+      } catch (error) {
+        console.error("Error stopping recognition:", error);
+        isRecognitionActive = false;
+        setListeningState(false);
+      }
+    } else {
+      // Start listening
+      try {
+        // Clean up any stale recognition instance
+        if (recognition) {
+          try {
+            recognition.abort();
+          } catch {
+            // ignore
+          }
+        }
+        // Create a fresh instance for each session
+        recognition = createRecognitionInstance();
+        recognition.start();
+      } catch (error) {
+        console.error("Error starting recognition:", error);
+        isRecognitionActive = false;
+        setListeningState(false);
+        
+        // Show error message to user
+        if (error.message && error.message.includes("already started")) {
+          // Recognition already running, just update state
+          isRecognitionActive = true;
+          setListeningState(true);
+        } else {
+          appendMessage("assistant", "Failed to start speech recognition. Please try again.");
+        }
+      }
+    }
+  });
+
+  // Cleanup on page unload
+  window.addEventListener("beforeunload", () => {
+    if (recognition && isRecognitionActive) {
+      try {
+        recognition.abort();
+      } catch {
+        // ignore
+      }
     }
   });
 }
