@@ -41,7 +41,14 @@ class CameraStream:
                 c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
         else:
             c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
+        
         if c is not None:
+            # Try to set 1080p
+            c.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+            c.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            actual_w = c.get(cv2.CAP_PROP_FRAME_WIDTH)
+            actual_h = c.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            logger.info(f"Camera resolution set to {actual_w}x{actual_h}")
             return c, "direct"
 
         # 2) Auto: first working /dev/video*

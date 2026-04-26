@@ -14,6 +14,8 @@ from .context import ContextManager
 
 logger = logging.getLogger(__name__)
 
+# Image processing configuration
+IMAGE_RESOLUTION = (1280, 720) 
 
 class ModelManager:
     def __init__(
@@ -28,7 +30,7 @@ class ModelManager:
         self.model_name = model_name
         self.overlay_state = overlay_state
         self.queue = asyncio.PriorityQueue()
-        self.context = ContextManager(image_limit=2)
+        self.context = ContextManager(token_limit=256000)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
         self._snapshot_queued = False # Track if a snapshot is already waiting
@@ -69,18 +71,18 @@ class ModelManager:
         if frame is None:
             return
 
-        # Resize to 256x256 to save context space
-        frame = cv2.resize(frame, (400, 400), interpolation=cv2.INTER_AREA)
+        # Resize to configured resolution to save context space
+        frame = cv2.resize(frame, IMAGE_RESOLUTION, interpolation=cv2.INTER_AREA)
 
         # Apply sharpening using Unsharp Masking (pure OpenCV approach)
         # This enhances edges which helps the model identify components in smaller images
         blurred = cv2.GaussianBlur(frame, (0, 0), 3)
         frame = cv2.addWeighted(frame, 1.5, blurred, -0.5, 0)
-        
-        _, buffer = cv2.imencode('.jpg', frame)
-        img_str = base64.b64encode(buffer).decode('utf-8')
-        self.context.add_image(img_str)
-        logger.debug(f"Visual memory updated with processed frame (256x256)")
+
+        _, buffer = cv2.imencode(".jpg", frame)
+        img_str = base64.b64encode(buffer).decode("utf-8")
+        self.context.add_image(img_str, resolution=IMAGE_RESOLUTION)
+        logger.debug(f"Visual memory updated with processed frame {IMAGE_RESOLUTION}")
 
     def _apply_overlays_from_response(self, data: Optional[Dict[str, Any]]) -> None:
         if not self.overlay_state or not data:

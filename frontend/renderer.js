@@ -1,4 +1,4 @@
-const API_BASE = `http://10.13.37.1:8000`;
+const API_BASE = `http://10.42.0.1:8000`;
 console.log(API_BASE);
 
 const WS_PATH = "/ws";

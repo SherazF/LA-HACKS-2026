@@ -22,14 +22,14 @@ class TestImageProcessing(unittest.TestCase):
         # Check context
         self.assertEqual(len(model_manager.context.image_buffer), 1)
         
-        # Decode the image back from base64
-        img_data = base64.b64decode(model_manager.context.image_buffer[0])
+        # Decode the image back from base64 (it's now a tuple of (data, tokens))
+        img_data = base64.b64decode(model_manager.context.image_buffer[0][0])
         nparr = np.frombuffer(img_data, np.uint8)
         decoded_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        # Verify dimensions are 256x256
-        self.assertEqual(decoded_frame.shape[0], 256)
-        self.assertEqual(decoded_frame.shape[1], 256)
+        # Verify dimensions are 720p
+        self.assertEqual(decoded_frame.shape[0], 720)
+        self.assertEqual(decoded_frame.shape[1], 1280)
         
         print(f"Verified image processed: {frame.shape} -> {decoded_frame.shape}")
 

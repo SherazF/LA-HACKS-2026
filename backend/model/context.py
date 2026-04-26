@@ -6,9 +6,10 @@ from typing import List, Dict, Optional
 logger = logging.getLogger(__name__)
 
 class ContextManager:
-    def __init__(self, image_limit: int = 3):
+    def __init__(self, token_limit: int = 256000):
         self.history: List[Dict] = []
-        self.image_buffer: deque = deque(maxlen=image_limit)
+        self.image_buffer: List[tuple] = [] # Stores (b64_data, token_count)
+        self.token_limit = token_limit
         self.state: Dict = {
             "milestones": [],
             "parts": {},
@@ -16,8 +17,46 @@ class ContextManager:
         }
         self.is_initialized: bool = False
 
-    def add_image(self, b64_image: str):
-        self.image_buffer.append(b64_image)
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough heuristic: 4 characters per token."""
+        return len(text) // 4
+
+    def _get_current_total_tokens(self) -> int:
+        history_tokens = sum(self._estimate_tokens(m["content"]) for m in self.history)
+        image_tokens = sum(img[1] for img in self.image_buffer)
+        return history_tokens + image_tokens
+
+    def _prune_context(self):
+        """Dynamically prune history and images to stay within token_limit."""
+        total = self._get_current_total_tokens()
+        if total <= self.token_limit:
+            return
+
+        logger.info(f"Pruning context: current tokens {total} exceeds limit {self.token_limit}")
+
+        # Strategy:
+        # 1. Prune images first (except the most recent one)
+        while len(self.image_buffer) > 1 and self._get_current_total_tokens() > self.token_limit:
+            self.image_buffer.pop(0)
+            logger.debug("Pruned an image from context")
+
+        # 2. Prune history (keep first 2 messages if they exist - initialization)
+        while len(self.history) > 3 and self._get_current_total_tokens() > self.token_limit:
+            # Pop the message after the initialization pair
+            popped = self.history.pop(2)
+            logger.debug(f"Pruned a message from context: {popped['role']}")
+
+        # 3. Last resort: Prune even the initialization if still over (unlikely)
+        while len(self.history) > 0 and self._get_current_total_tokens() > self.token_limit:
+            self.history.pop(0)
+
+    def add_image(self, b64_image: str, resolution: tuple = (256, 256)):
+        """Adds an image and estimates tokens based on pixels."""
+        # Heuristic: 256x256 image is approx 1024 tokens.
+        # Ratio is ~0.0156 tokens per pixel.
+        tokens = int(resolution[0] * resolution[1] * 0.015625)
+        self.image_buffer.append((b64_image, tokens))
+        self._prune_context()
 
     def add_message(self, role: str, content: str) -> bool:
         if not content or not content.strip() or content.strip().lower() == "empty":
@@ -31,13 +70,7 @@ class ContextManager:
                 return False
 
         self.history.append({"role": role, "content": content})
-        
-        # Keep the first 2 messages (initialization) and the last 10 messages
-        if len(self.history) > 12:
-            initialization = self.history[:2]
-            recent_history = self.history[-10:]
-            self.history = initialization + recent_history
-            
+        self._prune_context()
         return True
 
     def get_messages_payload(self, system_prompt: str) -> List[Dict]:
@@ -49,7 +82,7 @@ class ContextManager:
         if self.image_buffer:
             for msg in reversed(history_copy):
                 if msg["role"] == "user":
-                    msg["images"] = list(self.image_buffer)
+                    msg["images"] = [img[0] for img in self.image_buffer]
                     break
         
         messages.extend(history_copy)
