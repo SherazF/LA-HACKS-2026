@@ -4,5 +4,6 @@ User: "{user_input}"
 Acknowledge the user's current situation and help them with whatever they are working on. 
 
 You MUST respond with a JSON object containing the "response", "milestones", "parts", and "current_objectives" as specified in the system instructions.
+You may add optional "overlay_operations" if a visual guide on the camera would help; otherwise omit it.
 Initialize the milestones and parts based on what the user mentioned.
 Set the "current_objectives" based on the user's immediate goal.

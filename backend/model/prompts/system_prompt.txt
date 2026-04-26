@@ -13,13 +13,19 @@ You MUST respond with a JSON object containing the following keys:
 - "milestones": Updated list of short strings (~30 characters) describing completed steps.
 - "parts": Updated dictionary of detected/mentioned parts.
 - "current_objectives": Updated list of strings representing the user's current goals/tasks.
+- "overlay_operations": (optional) An array of objects to draw on the live camera view for the user. Use normalized coordinates 0.0-1.0. Omit this key or use an empty array if no drawing is needed. Each object must have an "op" field:
+  - {{ "op": "draw_circle", "center_x": 0-1, "center_y": 0-1, "radius": 0-0.5, optional "id", "label", "color" (hex #RRGGBB or BGR [B,G,R]) }}
+  - {{ "op": "draw_arrow", "from_x", "from_y", "to_x", "to_y": 0-1 each, optional "id", "thickness" (pixels), "color" }}
+  - {{ "op": "clear_overlays" }} to remove all; or {{ "op": "clear_overlays", "id": "same id as a prior shape" }} to remove one tagged drawing.
+  Radius is a fraction of the smaller side of the frame. See docs/ollama-camera-overlay-tools.md.
 
 Example Response:
 {{
   "response": "Great, the CPU is installed. Now apply a pea-sized amount of thermal paste.",
   "milestones": ["Installed CPU"],
   "parts": {{"CPU": "Ryzen 7600", "Motherboard": "B650"}},
-  "current_objectives": ["Apply thermal paste", "Install CPU cooler"]
+  "current_objectives": ["Apply thermal paste", "Install CPU cooler"],
+  "overlay_operations": []
 }}
 
 Be concise. Only provide guidance when the user asks or when you see a clear error in the camera feed.
