@@ -15,6 +15,7 @@ from chat import ChatManager
 from model.gemma import ModelManager
 from snapshot import SnapshotManager
 from ui import UIManager
+from voice import VoiceInputManager
 from ws_bridge import ConnectionManager, WebSocketBridge, handle_websocket, run_camera_frame_stream
 
 load_dotenv()
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     ollama_url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
     model_manager = ModelManager(bus, ollama_url=ollama_url, model_name=OLLAMA_MODEL)
     snapshot_manager = SnapshotManager(bus, camera, interval=SNAPSHOT_INTERVAL)
+    voice_manager = VoiceInputManager(bus)
     connection_manager = ConnectionManager()
     bridge = WebSocketBridge(bus, connection_manager)
     bridge.register()
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
     app.state.bus = bus
     app.state.camera = camera
     app.state.model_manager = model_manager
+    app.state.voice_manager = voice_manager
     app.state.connection_manager = connection_manager
     app.state.shutdown = shutdown
 

@@ -19,6 +19,7 @@ const sendBtn = document.getElementById("send-btn");
 const voiceBtn = document.getElementById("voice-btn");
 const statusEl = document.getElementById("status");
 const chatPanel = document.getElementById("chat-panel");
+const inputRow = document.getElementById("input-row");
 
 let isProcessing = false;
 let lastDetections = [];
@@ -32,11 +33,17 @@ let pingIntervalId = 0;
 let reconnectTimer = 0;
 let pendingUserAnalyses = 0;
 const ANALYSIS_TIMEOUT_MS = 45000;
+const CHAT_INPUT_MAX_HEIGHT = 200;
 
 const offlineBadge = document.createElement("div");
 offlineBadge.id = "offline-badge";
 offlineBadge.textContent = "System Offline";
 chatPanel.appendChild(offlineBadge);
+
+const listeningIndicatorEl = document.createElement("div");
+listeningIndicatorEl.id = "listening-indicator";
+listeningIndicatorEl.textContent = "Listening...";
+inputRow.insertAdjacentElement("afterend", listeningIndicatorEl);
 
 function feedWidth() {
   if (video.tagName === "IMG") {
@@ -76,6 +83,9 @@ function setListeningState(value) {
   voiceBtn.classList.toggle("show-wave", value);
   voiceBtn.classList.toggle("pulse", value);
   voiceBtn.setAttribute("aria-pressed", String(value));
+  voiceBtn.textContent = value ? "🔴" : "🎤";
+  voiceBtn.title = value ? "Click to stop listening" : "Click to start voice input";
+  listeningIndicatorEl.classList.toggle("visible", value);
 }
 
 function appendMessage(role, text) {
@@ -84,6 +94,19 @@ function appendMessage(role, text) {
   node.textContent = text;
   messagesEl.appendChild(node);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function autosizeChatInput() {
+  inputEl.style.height = "auto";
+  const nextHeight = Math.min(inputEl.scrollHeight, CHAT_INPUT_MAX_HEIGHT);
+  inputEl.style.height = `${nextHeight}px`;
+  inputEl.style.overflowY = inputEl.scrollHeight > CHAT_INPUT_MAX_HEIGHT ? "auto" : "hidden";
+  inputEl.scrollTop = inputEl.scrollHeight;
+}
+
+function resetChatInputHeight() {
+  inputEl.style.height = "auto";
+  inputEl.style.overflowY = "hidden";
 }
 
 function handleWsText(raw) {
@@ -110,6 +133,26 @@ function handleWsText(raw) {
   }
   if (t === "vision_result" && typeof msg.text === "string") {
     appendMessage("assistant", `${msg.text}`);
+    return;
+  }
+  if (t === "voice_state") {
+    setListeningState(Boolean(msg.listening));
+    return;
+  }
+  if (t === "voice_error" && msg.message) {
+    setListeningState(false);
+    appendMessage("assistant", msg.message);
+    return;
+  }
+  if (t === "voice_transcript" && typeof msg.text === "string") {
+    setListeningState(false);
+    const transcript = msg.text.trim();
+    if (!transcript) {
+      return;
+    }
+    const currentText = inputEl.value;
+    inputEl.value = currentText ? `${currentText} ${transcript}` : transcript;
+    autosizeChatInput();
   }
 }
 
@@ -411,50 +454,36 @@ async function analyzeFrame(options = {}) {
 
 function setupChat() {
   sendBtn.addEventListener("click", sendMessage);
+  inputEl.addEventListener("input", autosizeChatInput);
   inputEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       sendMessage();
     }
   });
+  resetChatInputHeight();
 }
 
 function setupVoiceInput() {
-  const SpeechRecognitionCtor = window.webkitSpeechRecognition || window.SpeechRecognition;
-  if (!SpeechRecognitionCtor) {
-    voiceBtn.disabled = true;
-    return;
-  }
-
-  const recognition = new SpeechRecognitionCtor();
-  recognition.lang = "en-US";
-  recognition.interimResults = false;
-  recognition.continuous = false;
-
-  recognition.addEventListener("result", (event) => {
-    const transcript = event.results?.[0]?.[0]?.transcript?.trim() || "";
-    if (transcript) {
-      inputEl.value = transcript;
-      sendMessage();
-    }
-  });
-
-  recognition.addEventListener("error", () => {
-    setListeningState(false);
-  });
-
-  recognition.addEventListener("end", () => {
-    setListeningState(false);
-  });
-
+  voiceBtn.title = "Click to start voice input";
   voiceBtn.addEventListener("click", () => {
-    if (isProcessing || isListening) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      appendMessage("assistant", "Not connected to backend voice service.");
       return;
     }
-    setListeningState(true);
-    try {
-      recognition.start();
-    } catch (error) {
+
+    if (isListening) {
       setListeningState(false);
+      socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
+    } else {
+      setListeningState(true);
+      socket.send(JSON.stringify({ v: 1, type: "voice_start" }));
+    }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
     }
   });
 }
@@ -469,6 +498,7 @@ function sendMessage() {
     return;
   }
   inputEl.value = "";
+  resetChatInputHeight();
   appendMessage("user", text);
   socket.send(JSON.stringify({ v: 1, type: "chat", text }));
 }
