@@ -12,6 +12,7 @@ const wsUrl = () => {
 };
 
 const video = document.getElementById("webcam");
+const modelFeed = document.getElementById("model-feed");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
 
@@ -135,6 +136,10 @@ function handleWsText(raw) {
   }
   if (t === "vision_result" && typeof msg.text === "string") {
     appendMessage("assistant", `${msg.text}`);
+    return;
+  }
+  if (t === "model_frame" && typeof msg.image === "string") {
+    modelFeed.src = `data:image/jpeg;base64,${msg.image}`;
     return;
   }
   if (t === "voice_state") {

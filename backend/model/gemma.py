@@ -82,6 +82,9 @@ class ModelManager:
         frame = cv2.addWeighted(frame, 1.5, blurred, -0.5, 0)
 
         _, buffer = cv2.imencode(".jpg", frame)
+        # Emit the processed frame so the UI can show "what the model sees"
+        asyncio.create_task(self.bus.emit("model_frame", frame_bytes=buffer.tobytes()))
+        
         img_str = base64.b64encode(buffer).decode("utf-8")
         self.context.add_image(img_str, resolution=IMAGE_RESOLUTION)
         logger.debug(f"Visual memory updated with processed frame {IMAGE_RESOLUTION}")

@@ -84,10 +84,23 @@ class WebSocketBridge:
         self._bus.subscribe("voice_transcript", self._on_voice_transcript)
         self._bus.subscribe("voice_error", self._on_voice_error)
         self._bus.subscribe("voice_state", self._on_voice_state)
+        self._bus.subscribe("model_frame", self._on_model_frame)
         self._registered = True
 
     async def _on_vision_result(self, text: str) -> None:
         await self._manager.broadcast_json({"v": 1, "type": "vision_result", "text": text})
+
+    async def _on_model_frame(self, frame_bytes: bytes) -> None:
+        # Send as binary with a small header or just broadcast if we can distinguish on frontend
+        # For simplicity, we'll send a JSON signal that a model frame is coming, 
+        # or just send it as a distinct binary message if we can handle it.
+        # Let's send a JSON message with the base64 to keep it simple and synchronized with other text events,
+        # OR better: use a custom binary format. 
+        # Actually, let's just broadcast_bytes. The frontend can distinguish based on size or a flag.
+        # To avoid breaking the main video feed, let's send it as a JSON message with base64 for now.
+        import base64
+        b64_frame = base64.b64encode(frame_bytes).decode("utf-8")
+        await self._manager.broadcast_json({"v": 1, "type": "model_frame", "image": b64_frame})
 
     async def _on_chat_response(self, text: str) -> None:
         await self._manager.broadcast_json({"v": 1, "type": "chat_response", "text": text})
