@@ -57,10 +57,19 @@ class ModelManager:
         """Helper to encode frame and add to visual memory."""
         if frame is None:
             return
+
+        # Resize to 256x256 to save context space
+        frame = cv2.resize(frame, (512, 512), interpolation=cv2.INTER_AREA)
+
+        # Apply sharpening using Unsharp Masking (pure OpenCV approach)
+        # This enhances edges which helps the model identify components in smaller images
+        blurred = cv2.GaussianBlur(frame, (0, 0), 3)
+        frame = cv2.addWeighted(frame, 1.5, blurred, -0.5, 0)
+        
         _, buffer = cv2.imencode('.jpg', frame)
         img_str = base64.b64encode(buffer).decode('utf-8')
         self.context.add_image(img_str)
-        logger.debug("Visual memory updated with new frame")
+        logger.debug(f"Visual memory updated with processed frame (256x256)")
 
     async def on_snapshot_ready(self, frame):
         if not self.context.is_initialized:
