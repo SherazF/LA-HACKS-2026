@@ -51,13 +51,24 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Could not connect to Ollama at {self.ollama_url}: {e}")
 
+    def _add_frame_to_context(self, frame):
+        """Helper to encode frame and add to visual memory."""
+        if frame is None:
+            return
+        _, buffer = cv2.imencode('.jpg', frame)
+        img_str = base64.b64encode(buffer).decode('utf-8')
+        self.context.add_image(img_str)
+        logger.debug("Visual memory updated with new frame")
+
     async def on_snapshot_ready(self, frame):
         if not self.context.is_initialized:
-            # Don't queue snapshots until we have an initial context from the user
             return
         await self.queue.put((1, {"type": "snapshot", "frame": frame}))
 
-    async def on_chat_input(self, text):
+    async def on_chat_input(self, text, frame=None):
+        if frame is not None:
+            self._add_frame_to_context(frame)
+
         await self.queue.put((0, {"type": "chat", "text": text}))
         if self.current_task and not self.current_task.done():
             logger.info("Chat preempting in-flight vision task...")
@@ -112,11 +123,7 @@ class ModelManager:
             await self.bus.emit("chat_response", text=response)
 
     async def _process_snapshot(self, frame):
-        # Convert frame to base64
-        _, buffer = cv2.imencode('.jpg', frame)
-        img_str = base64.b64encode(buffer).decode('utf-8')
-        self.context.add_image(img_str)
-        
+        self._add_frame_to_context(frame)
         prompt = self.snapshot_prompt_tpl
         self.context.add_message("user", prompt)
         

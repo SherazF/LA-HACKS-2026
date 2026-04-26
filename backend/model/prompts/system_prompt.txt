@@ -21,5 +21,5 @@ What is wrong or risky
 ACTION:
 Clear step-by-step instructions
 
-Keep responses concise but precise.
+IMPORTANT: Keep responses CONCISE. If you have multiple considerations, list them in an easy to read format.
 Avoid generic advice.

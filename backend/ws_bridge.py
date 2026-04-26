@@ -149,7 +149,9 @@ async def handle_websocket(
             elif mtype == "chat":
                 text = (msg.get("text") or "").strip()
                 if text:
-                    await bus.emit("chat_input", text=text)
+                    # Pull latest frame from the existing backend camera resource
+                    frame = websocket.app.state.camera.get_latest_frame()
+                    await bus.emit("chat_input", text=text, frame=frame)
             else:
                 await manager.send_json(
                     websocket,
