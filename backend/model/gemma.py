@@ -187,30 +187,52 @@ class ModelManager:
         system_prompt = self.system_prompt_tpl.format(
             milestones=formatted_state["milestones"],
             parts=formatted_state["parts"],
-            current_objectives=formatted_state["current_objectives"]
+            current_objectives=formatted_state["current_objectives"],
         )
         messages = self.context.get_messages_payload(system_prompt)
-        
+
         payload = {
             "model": self.model_name,
             "messages": messages,
             "stream": False,
-            "format": "json"
+            "format": "json",
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(f"{self.ollama_url}/api/chat", json=payload)
-                response.raise_for_status()
-                result = response.json()
-                content = result.get("message", {}).get("content", "")
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse JSON content: {content}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(f"{self.ollama_url}/api/chat", json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+                    content = result.get("message", {}).get("content", "")
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            f"Attempt {attempt + 1}: Failed to parse JSON content: {content}"
+                        )
+                        if attempt == max_retries - 1:
+                            return None
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 500:
+                    logger.warning(f"Attempt {attempt + 1}: Server returned 500 error")
+                    if attempt == max_retries - 1:
+                        return None
+                else:
+                    logger.error(f"HTTP error occurred: {e}")
                     return None
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Error querying model: {e}")
-            return None
+            except (httpx.RequestError, asyncio.TimeoutError) as e:
+                logger.warning(f"Attempt {attempt + 1}: Request failed: {e}")
+                if attempt == max_retries - 1:
+                    return None
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error querying model: {e}")
+                return None
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1.0) # Wait before retrying
+
+        return None

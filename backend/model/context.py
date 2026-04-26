@@ -35,10 +35,15 @@ class ContextManager:
         logger.info(f"Pruning context: current tokens {total} exceeds limit {self.token_limit}")
 
         # Strategy:
-        # 1. Prune images first (except the most recent one)
+        # 1. Strictly limit to 2 images max
+        while len(self.image_buffer) > 2:
+            self.image_buffer.pop(0)
+            logger.debug("Pruned image to maintain strict 2-image limit")
+
+        # 2. Prune further if still over token limit (except the most recent one)
         while len(self.image_buffer) > 1 and self._get_current_total_tokens() > self.token_limit:
             self.image_buffer.pop(0)
-            logger.debug("Pruned an image from context")
+            logger.debug("Pruned an image to stay within token budget")
 
         # 2. Prune history (keep first 2 messages if they exist - initialization)
         while len(self.history) > 3 and self._get_current_total_tokens() > self.token_limit:

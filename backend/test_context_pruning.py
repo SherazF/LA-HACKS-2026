@@ -3,9 +3,8 @@ from model.context import ContextManager
 
 class TestContextPruning(unittest.TestCase):
     def test_dynamic_pruning(self):
-        # Set a small limit for testing: 1000 tokens
-        # 1 image = 1024 tokens, so adding 1 image should trigger pruning if we add anything else
-        ctx = ContextManager(token_limit=1500)
+        # Set a limit that can hold 2 images (2048) + init (50) + some buffer
+        ctx = ContextManager(token_limit=3000)
         
         # 1. Add initialization messages (~50 tokens total)
         ctx.add_message("user", "Hello" * 20) # 100 chars -> 25 tokens
@@ -15,14 +14,15 @@ class TestContextPruning(unittest.TestCase):
         ctx.add_image("fake_base64_data", resolution=(256, 256))
         
         current_tokens = ctx._get_current_total_tokens()
-        self.assertLessEqual(current_tokens, 1500)
+        self.assertLessEqual(current_tokens, 3000)
         self.assertEqual(len(ctx.image_buffer), 1)
         self.assertEqual(len(ctx.history), 2)
         
-        # 3. Add another image - should prune the first one
+        # 3. Add two more images - should maintain exactly 2
         ctx.add_image("second_fake_image", resolution=(256, 256))
-        self.assertEqual(len(ctx.image_buffer), 1)
-        self.assertLessEqual(ctx._get_current_total_tokens(), 1500)
+        ctx.add_image("third_fake_image", resolution=(256, 256))
+        self.assertEqual(len(ctx.image_buffer), 2)
+        self.assertLessEqual(ctx._get_current_total_tokens(), 3000)
         
         # 4. Add many messages to force message pruning
         # Each message is 400 chars -> 100 tokens
@@ -34,7 +34,7 @@ class TestContextPruning(unittest.TestCase):
         # Adding more will eventually prune everything except the latest and init.
         
         final_tokens = ctx._get_current_total_tokens()
-        self.assertLessEqual(final_tokens, 1500)
+        self.assertLessEqual(final_tokens, 3000)
         # Initialization messages (first 2) should be there
         self.assertEqual(ctx.history[0]["content"], "Hello" * 20)
         
