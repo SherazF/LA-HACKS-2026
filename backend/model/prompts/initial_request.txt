@@ -1,9 +1,9 @@
-The user is starting their session.
-User: "{user_input}"
+The user just started a build session and sent their first message:
+"{user_input}"
 
-Acknowledge the user's current situation and help them with whatever they are working on. 
-
-You MUST respond with a JSON object containing the "response", "milestones", "parts", and "current_objectives" as specified in the system instructions.
-You may add optional "overlay_operations" if a visual guide on the camera would help; otherwise omit it.
-Initialize the milestones and parts based on what the user mentioned.
-Set the "current_objectives" based on the user's immediate goal.
+Do all of this in a single JSON response that follows the system-prompt schema:
+- "response": a short, friendly greeting (1-2 sentences) that acknowledges what they said and tells them what you'll help with. If they named parts you can see in the frame, mention one specifically. If they only said "hi" or similar, just welcome them and ask what they're starting with.
+- "parts": include only parts the user explicitly named OR that you can clearly see in the current frame, using the names from the Known parts list. If unsure, leave it empty.
+- "milestones": empty unless the user said something is already done.
+- "current_objectives": 1-2 short next steps based on what they said. If they didn't say anything specific, suggest "Lay out parts" or similar starter objective.
+- "overlay_operations": omit unless you're pointing at a specific visible spot.

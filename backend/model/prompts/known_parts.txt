@@ -1,0 +1,19 @@
+CPU (Central Processing Unit)
+CPU Cooler
+Motherboard
+RAM (Memory)
+GPU (Graphics Card)
+SSD (Solid State Drive)
+HDD (Hard Disk Drive)
+PSU (Power Supply Unit)
+Case / Chassis
+Thermal Paste
+Fans
+SATA Cables
+Power Cables
+Case Headers
+IO Shield
+Wifi Antenna
+M.2 Screw
+Screws
+Zip Ties / Cable Management

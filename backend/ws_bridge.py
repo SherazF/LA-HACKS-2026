@@ -119,7 +119,7 @@ async def run_camera_frame_stream(
             frame = camera.get_latest_frame()
             if frame is not None:
                 vis = render_overlays(frame, overlay_state)
-                ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
                 if ok:
                     await manager.broadcast_bytes(buf.tobytes())
         try:

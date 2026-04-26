@@ -6,7 +6,7 @@ from camera import CameraStream
 logger = logging.getLogger(__name__)
 
 class SnapshotManager:
-    def __init__(self, bus: EventBus, camera: CameraStream, interval: float = 15.0):
+    def __init__(self, bus: EventBus, camera: CameraStream, interval: float = 60):
         self.bus = bus
         self.camera = camera
         self.interval = interval
