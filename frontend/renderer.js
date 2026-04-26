@@ -227,20 +227,41 @@ function pickBestVoice() {
   if (cachedVoice && voices.length === cachedVoiceListSize) {
     return cachedVoice;
   }
-  let best = null;
-  let bestScore = -Infinity;
-  for (const v of voices) {
-    const s = scoreVoice(v);
-    if (s > bestScore) {
-      bestScore = s;
-      best = v;
+
+  let override = null;
+  try {
+    override = (localStorage.getItem("ttsVoice") || "").trim().toLowerCase();
+  } catch {}
+  if (override) {
+    const match = voices.find((v) =>
+      (v.name || "").toLowerCase().includes(override),
+    );
+    if (match) {
+      cachedVoice = match;
+      cachedVoiceListSize = voices.length;
+      console.log(
+        `[tts] using OVERRIDE voice: ${match.name} (${match.lang}) local=${match.localService}`,
+      );
+      return match;
     }
+    console.warn(
+      `[tts] override "${override}" not found; falling back to auto-pick`,
+    );
   }
+
+  let bestScore = -Infinity;
+  const scored = voices.map((v) => {
+    const s = scoreVoice(v);
+    if (s > bestScore) bestScore = s;
+    return { voice: v, score: s };
+  });
+  const top = scored.filter((x) => x.score === bestScore).map((x) => x.voice);
+  const best = top[Math.floor(Math.random() * top.length)] || null;
   cachedVoice = best;
   cachedVoiceListSize = voices.length;
   if (best) {
     console.log(
-      `[tts] using voice: ${best.name} (${best.lang}) score=${bestScore} local=${best.localService}`,
+      `[tts] using voice: ${best.name} (${best.lang}) score=${bestScore} local=${best.localService} (1 of ${top.length} tied)`,
     );
   }
   return best;
