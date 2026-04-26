@@ -56,6 +56,10 @@ const lastFrameImage = new Image();
 let lastFrameLoaded = false;
 const MODEL_VIEW_W = 1024;
 const MODEL_VIEW_H = 576;
+const modelViewOffscreen = document.createElement("canvas");
+modelViewOffscreen.width = MODEL_VIEW_W;
+modelViewOffscreen.height = MODEL_VIEW_H;
+const modelViewOffscreenCtx = modelViewOffscreen.getContext("2d");
 
 let chatCollapsed = false;
 let latestAssistantText = "";
@@ -400,8 +404,22 @@ function drawModelView() {
   modelViewCtx.fillStyle = "#06080f";
   modelViewCtx.fillRect(0, 0, cw, ch);
   if (!lastFrameLoaded) {
+    drawModelViewBanner(cw, ch, false);
     return;
   }
+
+  modelViewOffscreenCtx.imageSmoothingEnabled = true;
+  modelViewOffscreenCtx.imageSmoothingQuality = "high";
+  modelViewOffscreenCtx.fillStyle = "#000";
+  modelViewOffscreenCtx.fillRect(0, 0, MODEL_VIEW_W, MODEL_VIEW_H);
+  modelViewOffscreenCtx.drawImage(
+    lastFrameImage,
+    0,
+    0,
+    MODEL_VIEW_W,
+    MODEL_VIEW_H,
+  );
+
   const ratio = MODEL_VIEW_W / MODEL_VIEW_H;
   let drawW = cw;
   let drawH = Math.round(cw / ratio);
@@ -411,19 +429,35 @@ function drawModelView() {
   }
   const offX = Math.floor((cw - drawW) / 2);
   const offY = Math.floor((ch - drawH) / 2);
-  modelViewCtx.imageSmoothingEnabled = true;
-  modelViewCtx.imageSmoothingQuality = "low";
-  modelViewCtx.drawImage(lastFrameImage, offX, offY, drawW, drawH);
-  modelViewCtx.fillStyle = "rgba(0,0,0,0.55)";
-  modelViewCtx.fillRect(offX + 12, offY + 12, 220, 26);
-  modelViewCtx.fillStyle = "rgba(255,255,255,0.92)";
+
+  modelViewCtx.imageSmoothingEnabled = false;
+  modelViewCtx.drawImage(modelViewOffscreen, offX, offY, drawW, drawH);
+
+  modelViewCtx.strokeStyle = "rgba(255, 138, 85, 0.85)";
+  modelViewCtx.lineWidth = 3;
+  modelViewCtx.strokeRect(offX + 1.5, offY + 1.5, drawW - 3, drawH - 3);
+
+  drawModelViewBanner(cw, ch, true);
+}
+
+function drawModelViewBanner(cw, _ch, hasFrame) {
+  const text = hasFrame
+    ? `MODEL VIEW · ${MODEL_VIEW_W}×${MODEL_VIEW_H} · JPEG q≈88 · nearest-neighbor upscale`
+    : "MODEL VIEW · waiting for frame…";
   modelViewCtx.font =
-    "12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-  modelViewCtx.fillText(
-    `Model view · ${MODEL_VIEW_W}×${MODEL_VIEW_H} JPEG q=88`,
-    offX + 22,
-    offY + 30,
-  );
+    "600 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  const padX = 16;
+  const padY = 8;
+  const textWidth = modelViewCtx.measureText(text).width;
+  const bannerW = Math.ceil(textWidth + padX * 2);
+  const bannerH = 32;
+  const bannerX = Math.floor((cw - bannerW) / 2);
+  const bannerY = 18;
+  modelViewCtx.fillStyle = "rgba(255, 116, 80, 0.92)";
+  modelViewCtx.fillRect(bannerX, bannerY, bannerW, bannerH);
+  modelViewCtx.fillStyle = "#1a0a04";
+  modelViewCtx.textBaseline = "middle";
+  modelViewCtx.fillText(text, bannerX + padX, bannerY + bannerH / 2 + 1);
 }
 
 function setModelViewEnabled(enabled) {
@@ -431,8 +465,12 @@ function setModelViewEnabled(enabled) {
   document.body.classList.toggle("model-view", modelViewEnabled);
   modelViewToggle.setAttribute("aria-pressed", String(modelViewEnabled));
   modelViewToggle.title = modelViewEnabled
-    ? "Hide model view"
-    : "Show model view";
+    ? "Hide model view (currently showing what the model sees)"
+    : "Show model view (what the model actually sees)";
+  const labelEl = modelViewToggle.querySelector(".label");
+  if (labelEl) {
+    labelEl.textContent = modelViewEnabled ? "Model view: ON" : "Model view";
+  }
   if (modelViewEnabled) {
     drawModelView();
   }
