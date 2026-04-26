@@ -1,5 +1,6 @@
 import glob
 import os
+import platform
 import time
 import cv2
 import threading
@@ -12,6 +13,20 @@ CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "1920"))
 CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "1080"))
 CAMERA_FPS = int(os.getenv("CAMERA_FPS", "30"))
 CAMERA_FOURCC = os.getenv("CAMERA_FOURCC", "MJPG").upper()
+
+
+def _preferred_backend() -> int:
+    """OpenCV's CAP_ANY auto-backend picks ffmpeg+v4l2 on Linux, which does
+    NOT properly negotiate MJPG with most UVC webcams — we end up with raw
+    YUYV that physically caps at ~5 fps for 1080p over USB. Forcing the
+    real V4L2 backend lets MJPG actually apply, which is the difference
+    between 5 fps and 30 fps for the same hardware.
+    """
+    if platform.system() == "Linux":
+        return cv2.CAP_V4L2
+    if platform.system() == "Darwin":
+        return cv2.CAP_AVFOUNDATION
+    return cv2.CAP_ANY
 
 
 def _configure_capture(cap: cv2.VideoCapture, source_label: str) -> None:
@@ -76,6 +91,7 @@ class CameraStream:
     def _open_capture(self) -> Tuple[Optional[cv2.VideoCapture], str]:
         """Try requested index/path, then first working /dev/video* (e.g. no /dev/video0)."""
         video_nodes = sorted(glob.glob("/dev/video*"))
+        backend = _preferred_backend()
 
         def try_cap(opener) -> Tuple[Optional[cv2.VideoCapture], str]:
             cap = opener()
@@ -87,18 +103,18 @@ class CameraStream:
         if isinstance(self.camera_index, int):
             dev = f"/dev/video{self.camera_index}"
             if os.path.exists(dev):
-                c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
+                c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index, backend))
                 if c is not None:
                     _configure_capture(c, f"index={self.camera_index}")
                     return c, "direct"
         else:
-            c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
+            c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index, backend))
             if c is not None:
                 _configure_capture(c, f"path={self.camera_index}")
                 return c, "direct"
 
         for path in video_nodes:
-            c, _ = try_cap(lambda p=path: cv2.VideoCapture(p))
+            c, _ = try_cap(lambda p=path: cv2.VideoCapture(p, backend))
             if c is not None:
                 _configure_capture(c, f"auto={path}")
                 return c, f"auto:{path}"
