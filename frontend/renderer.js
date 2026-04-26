@@ -54,8 +54,31 @@ let ttsSpeaking = false;
 let modelViewEnabled = false;
 const lastFrameImage = new Image();
 let lastFrameLoaded = false;
-const MODEL_VIEW_W = 1024;
-const MODEL_VIEW_H = 576;
+// Scene resolution the model actually sees (mirrors IMAGE_RESOLUTION in
+// backend/model/gemma.py).
+const MODEL_SCENE_W = 1024;
+const MODEL_SCENE_H = 576;
+// Coordinate ruler the backend bakes into the input image
+// (mirrors RULER_* constants in backend/model/gemma.py). We re-render it
+// here so the model view actually shows what the model sees, including
+// the axis labels it uses to read off coordinates.
+const RULER_MARGIN_PX = 36;
+const RULER_BG = "rgb(24, 24, 24)";
+const RULER_FG = "rgb(240, 240, 240)";
+const RULER_TICK_FG = "rgb(255, 200, 170)";
+const RULER_GRID_FG = "rgb(60, 60, 60)";
+const RULER_TICK_LEN = 6;
+const RULER_LABELS = [
+  [0.0, "0.0"],
+  [0.2, "0.2"],
+  [0.4, "0.4"],
+  [0.6, "0.6"],
+  [0.8, "0.8"],
+  [1.0, "1.0"],
+];
+const RULER_FAINT_GRID_ENABLED = true;
+const MODEL_VIEW_W = MODEL_SCENE_W + RULER_MARGIN_PX;
+const MODEL_VIEW_H = MODEL_SCENE_H + RULER_MARGIN_PX;
 const modelViewOffscreen = document.createElement("canvas");
 modelViewOffscreen.width = MODEL_VIEW_W;
 modelViewOffscreen.height = MODEL_VIEW_H;
@@ -541,15 +564,16 @@ function drawModelView() {
 
   modelViewOffscreenCtx.imageSmoothingEnabled = true;
   modelViewOffscreenCtx.imageSmoothingQuality = "high";
-  modelViewOffscreenCtx.fillStyle = "#000";
+  modelViewOffscreenCtx.fillStyle = RULER_BG;
   modelViewOffscreenCtx.fillRect(0, 0, MODEL_VIEW_W, MODEL_VIEW_H);
   modelViewOffscreenCtx.drawImage(
     lastFrameImage,
-    0,
-    0,
-    MODEL_VIEW_W,
-    MODEL_VIEW_H,
+    RULER_MARGIN_PX,
+    RULER_MARGIN_PX,
+    MODEL_SCENE_W,
+    MODEL_SCENE_H,
   );
+  drawCoordinateRuler(modelViewOffscreenCtx);
 
   const ratio = MODEL_VIEW_W / MODEL_VIEW_H;
   let drawW = cw;
@@ -571,9 +595,63 @@ function drawModelView() {
   drawModelViewBanner(cw, ch, true);
 }
 
+function drawCoordinateRuler(ctx) {
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = RULER_BG;
+  ctx.fillRect(0, 0, MODEL_VIEW_W, RULER_MARGIN_PX);
+  ctx.fillRect(0, 0, RULER_MARGIN_PX, MODEL_VIEW_H);
+
+  if (RULER_FAINT_GRID_ENABLED) {
+    ctx.strokeStyle = RULER_GRID_FG;
+    ctx.lineWidth = 1;
+    for (let i = 1; i < RULER_LABELS.length - 1; i += 1) {
+      const frac = RULER_LABELS[i][0];
+      const x = RULER_MARGIN_PX + Math.round(frac * (MODEL_SCENE_W - 1)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, RULER_MARGIN_PX);
+      ctx.lineTo(x, MODEL_VIEW_H);
+      ctx.stroke();
+      const y = RULER_MARGIN_PX + Math.round(frac * (MODEL_SCENE_H - 1)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(RULER_MARGIN_PX, y);
+      ctx.lineTo(MODEL_VIEW_W, y);
+      ctx.stroke();
+    }
+  }
+
+  ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  ctx.fillStyle = RULER_FG;
+  ctx.strokeStyle = RULER_TICK_FG;
+  ctx.lineWidth = 1;
+
+  for (const [frac, text] of RULER_LABELS) {
+    const x = RULER_MARGIN_PX + Math.round(frac * (MODEL_SCENE_W - 1));
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, RULER_MARGIN_PX - RULER_TICK_LEN);
+    ctx.lineTo(x + 0.5, RULER_MARGIN_PX - 1);
+    ctx.stroke();
+    const tw = ctx.measureText(text).width;
+    const tx = Math.max(2, Math.min(MODEL_VIEW_W - tw - 2, x - tw / 2));
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(text, tx, RULER_MARGIN_PX - RULER_TICK_LEN - 4);
+  }
+
+  for (const [frac, text] of RULER_LABELS) {
+    const y = RULER_MARGIN_PX + Math.round(frac * (MODEL_SCENE_H - 1));
+    ctx.beginPath();
+    ctx.moveTo(RULER_MARGIN_PX - RULER_TICK_LEN, y + 0.5);
+    ctx.lineTo(RULER_MARGIN_PX - 1, y + 0.5);
+    ctx.stroke();
+    const tw = ctx.measureText(text).width;
+    const tx = Math.max(2, RULER_MARGIN_PX - RULER_TICK_LEN - tw - 4);
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, tx, y);
+  }
+}
+
 function drawModelViewBanner(cw, _ch, hasFrame) {
   const text = hasFrame
-    ? `MODEL VIEW · ${MODEL_VIEW_W}×${MODEL_VIEW_H} · JPEG q≈88 · nearest-neighbor upscale`
+    ? `MODEL VIEW · ${MODEL_SCENE_W}×${MODEL_SCENE_H} scene + ${RULER_MARGIN_PX}px coord ruler · JPEG q≈88`
     : "MODEL VIEW · waiting for frame…";
   modelViewCtx.font =
     "600 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
