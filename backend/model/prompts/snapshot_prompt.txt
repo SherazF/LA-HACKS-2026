@@ -1,6 +1,13 @@
 Analyze the current camera frame against the build state in the system prompt.
-Only report if you observe something new, incorrect, or actionable.
-If there is nothing new to report, respond with exactly "empty".
-If reporting, be brief (1-2 sentences max).
-Only add overlay_operations if you can point to a specific visible error.
-Never identify parts not in the known build parts list.
+
+Specifically check in this order:
+1. Have any current_objectives been completed or partially completed?
+2. Are any known parts newly visible that weren't previously in "parts"?
+3. Is anything incorrect, misaligned, or potentially dangerous?
+4. Is there any actionable guidance that would help the user right now?
+
+If ANY of the above are true, report it. Be brief — 1-2 sentences max.
+Only respond "empty" if none of the above are true and the scene is unchanged.
+
+When you need to point to a specific location, add overlay_operations.
+Only use overlays for specific errors or precise placement guidance — not for general commentary.
