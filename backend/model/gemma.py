@@ -93,26 +93,26 @@ class ModelManager:
             try:
                 priority, item = await self.queue.get()
                 
-                async with self.processing_lock:
-                    if item["type"] == "chat":
-                        await self._process_chat(item["text"])
-                    elif item["type"] == "snapshot":
-                        self._snapshot_queued = False # Reset flag since we are now processing it
-                        if not self.queue.empty():
-                            next_prio, _ = self.queue._queue[0]
-                            if next_prio < priority:
-                                logger.info("Skipping snapshot for pending chat")
-                                self.queue.task_done()
-                                continue
-                        
-                        self.current_task = asyncio.create_task(self._process_snapshot(item["frame"]))
-                        try:
-                            await self.current_task
-                        except asyncio.CancelledError:
-                            logger.info("Vision task cancelled")
-                        finally:
-                            self.current_task = None
-                
+                try:
+                    async with self.processing_lock:
+                        if item["type"] == "chat":
+                            await self._process_chat(item["text"])
+                        elif item["type"] == "snapshot":
+                            self._snapshot_queued = False # Reset flag since we are now processing it
+                            if not self.queue.empty():
+                                next_prio, _ = self.queue._queue[0]
+                                if next_prio < priority:
+                                    logger.info("Skipping snapshot for pending chat")
+                                    continue
+                            
+                            self.current_task = asyncio.create_task(self._process_snapshot(item["frame"]))
+                            try:
+                                await self.current_task
+                            except asyncio.CancelledError:
+                                logger.info("Vision task cancelled")
+                            finally:
+                                self.current_task = None
+                finally:
                     self.queue.task_done()
                     # Signal inference done inside the lock to ensure strict timing
                     await self.bus.emit("inference_done")
@@ -134,8 +134,8 @@ class ModelManager:
             self.context.update_state(json_resp)
             response_text = json_resp.get("response", "")
             if response_text and response_text.strip().lower() != "empty":
-                self.context.add_message("assistant", response_text)
-                await self.bus.emit("chat_response", text=response_text)
+                if self.context.add_message("assistant", response_text):
+                    await self.bus.emit("chat_response", text=response_text)
 
     async def _process_snapshot(self, frame):
         self._add_frame_to_context(frame)
@@ -148,8 +148,8 @@ class ModelManager:
             self.context.update_state(json_resp)
             response_text = json_resp.get("response", "")
             if response_text and response_text.strip().lower() != "empty":
-                self.context.add_message("assistant", response_text)
-                await self.bus.emit("vision_result", text=response_text)
+                if self.context.add_message("assistant", response_text):
+                    await self.bus.emit("vision_result", text=response_text)
 
     async def _query_model(self) -> Optional[Dict]:
         formatted_state = self.context.get_formatted_state()

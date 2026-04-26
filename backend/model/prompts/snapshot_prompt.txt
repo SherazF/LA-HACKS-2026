@@ -1,0 +1,3 @@
+Analyze the current camera frame, and compare it with previous ones. Observe the user's progress and any parts visible. 
+If everything looks correct and there are no significant changes or errors, respond with "empty". 
+Otherwise, provide a brief helpful observation or guidance.

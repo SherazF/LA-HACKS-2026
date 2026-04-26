@@ -19,16 +19,16 @@ class ContextManager:
     def add_image(self, b64_image: str):
         self.image_buffer.append(b64_image)
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str) -> bool:
         if not content or not content.strip() or content.strip().lower() == "empty":
-            return
+            return False
             
         # Deduplication: Don't add if it's the same as the last message from this role
         if self.history:
             last_msg = self.history[-1]
             if last_msg["role"] == role and last_msg["content"].strip() == content.strip():
                 logger.debug(f"Ignoring duplicate message from {role}")
-                return
+                return False
 
         self.history.append({"role": role, "content": content})
         
@@ -37,6 +37,8 @@ class ContextManager:
             initialization = self.history[:2]
             recent_history = self.history[-10:]
             self.history = initialization + recent_history
+            
+        return True
 
     def get_messages_payload(self, system_prompt: str) -> List[Dict]:
         """Constructs the payload for Ollama including images on the latest user message."""
