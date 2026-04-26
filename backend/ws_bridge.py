@@ -43,6 +43,7 @@ class ConnectionManager:
         if not self._active:
             return
         text = json.dumps(payload)
+        logger.info(f"Broadcasting JSON to {len(self._active)} client(s)")
         dead: list[WebSocket] = []
         for ws in list(self._active):
             try:
@@ -55,6 +56,7 @@ class ConnectionManager:
     async def broadcast_bytes(self, data: bytes) -> None:
         if not self._active or not data:
             return
+        logger.debug(f"Broadcasting bytes to {len(self._active)} client(s)")
         dead: list[WebSocket] = []
         for ws in list(self._active):
             try:

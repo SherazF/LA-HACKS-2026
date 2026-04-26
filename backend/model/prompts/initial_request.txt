@@ -2,4 +2,7 @@ The user is starting their session.
 User: "{user_input}"
 
 Acknowledge the user's current situation and help them with whatever they are working on. 
-Record any initial milestones or parts mentioned.
+
+You MUST respond with a JSON object containing the "response", "milestones", "parts", and "current_objectives" as specified in the system instructions.
+Initialize the milestones and parts based on what the user mentioned.
+Set the "current_objectives" based on the user's immediate goal.

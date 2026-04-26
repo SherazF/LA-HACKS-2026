@@ -4,6 +4,7 @@ import httpx
 import base64
 import cv2
 import os
+import json
 from typing import Dict, List, Optional
 from bus import EventBus
 from .context import ContextManager
@@ -19,6 +20,7 @@ class ModelManager:
         self.context = ContextManager(image_limit=3)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
+        self._snapshot_queued = False # Track if a snapshot is already waiting
         
         # Load Prompts
         self.prompt_dir = os.path.join(os.path.dirname(__file__), "prompts")
@@ -63,11 +65,20 @@ class ModelManager:
     async def on_snapshot_ready(self, frame):
         if not self.context.is_initialized:
             return
+            
+        if self._snapshot_queued:
+            logger.debug("Snapshot already in queue, dropping new one to prevent backlog")
+            return
+            
+        self._snapshot_queued = True
         await self.queue.put((1, {"type": "snapshot", "frame": frame}))
 
     async def on_chat_input(self, text, frame=None):
         if frame is not None:
             self._add_frame_to_context(frame)
+
+        # Reset the snapshot timer so we don't double-trigger analysis
+        await self.bus.emit("reset_snapshot_timer")
 
         await self.queue.put((0, {"type": "chat", "text": text}))
         if self.current_task and not self.current_task.done():
@@ -75,7 +86,7 @@ class ModelManager:
             self.current_task.cancel()
 
     async def start(self):
-        logger.info(f"Model Manager (Modular) started (Model: {self.model_name})")
+        logger.info(f"Model Manager (Structured) started (Model: {self.model_name})")
         await self._check_connection()
         
         while True:
@@ -86,6 +97,7 @@ class ModelManager:
                     if item["type"] == "chat":
                         await self._process_chat(item["text"])
                     elif item["type"] == "snapshot":
+                        self._snapshot_queued = False # Reset flag since we are now processing it
                         if not self.queue.empty():
                             next_prio, _ = self.queue._queue[0]
                             if next_prio < priority:
@@ -101,8 +113,9 @@ class ModelManager:
                         finally:
                             self.current_task = None
                 
-                self.queue.task_done()
-                await self.bus.emit("inference_done")
+                    self.queue.task_done()
+                    # Signal inference done inside the lock to ensure strict timing
+                    await self.bus.emit("inference_done")
             except Exception as e:
                 logger.error(f"Model Manager error: {e}")
                 await asyncio.sleep(0.1)
@@ -115,37 +128,43 @@ class ModelManager:
             self.context.is_initialized = True
         
         self.context.add_message("user", prompt)
-        response = await self._query_model()
+        json_resp = await self._query_model()
         
-        if response:
-            self.context.update_state_from_text(response)
-            self.context.add_message("assistant", response)
-            await self.bus.emit("chat_response", text=response)
+        if json_resp:
+            self.context.update_state(json_resp)
+            response_text = json_resp.get("response", "")
+            if response_text and response_text.strip().lower() != "empty":
+                self.context.add_message("assistant", response_text)
+                await self.bus.emit("chat_response", text=response_text)
 
     async def _process_snapshot(self, frame):
         self._add_frame_to_context(frame)
         prompt = self.snapshot_prompt_tpl
         self.context.add_message("user", prompt)
         
-        response = await self._query_model()
+        json_resp = await self._query_model()
         
-        if response:
-            self.context.update_state_from_text(response)
-            self.context.add_message("assistant", response)
-            await self.bus.emit("vision_result", text=response)
+        if json_resp:
+            self.context.update_state(json_resp)
+            response_text = json_resp.get("response", "")
+            if response_text and response_text.strip().lower() != "empty":
+                self.context.add_message("assistant", response_text)
+                await self.bus.emit("vision_result", text=response_text)
 
-    async def _query_model(self) -> Optional[str]:
+    async def _query_model(self) -> Optional[Dict]:
         formatted_state = self.context.get_formatted_state()
         system_prompt = self.system_prompt_tpl.format(
             milestones=formatted_state["milestones"],
-            parts=formatted_state["parts"]
+            parts=formatted_state["parts"],
+            current_objectives=formatted_state["current_objectives"]
         )
         messages = self.context.get_messages_payload(system_prompt)
         
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "stream": False
+            "stream": False,
+            "format": "json"
         }
 
         try:
@@ -153,7 +172,12 @@ class ModelManager:
                 response = await client.post(f"{self.ollama_url}/api/chat", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                return result.get("message", {}).get("content", "")
+                content = result.get("message", {}).get("content", "")
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse JSON content: {content}")
+                    return None
         except asyncio.CancelledError:
             raise
         except Exception as e:

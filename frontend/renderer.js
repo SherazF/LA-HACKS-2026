@@ -109,7 +109,7 @@ function handleWsText(raw) {
     return;
   }
   if (t === "vision_result" && typeof msg.text === "string") {
-    appendMessage("assistant", `[Vision] ${msg.text}`);
+    appendMessage("assistant", `${msg.text}`);
   }
 }
 
