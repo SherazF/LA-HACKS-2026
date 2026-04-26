@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 import cv2
 import httpx
+import numpy as np
 
 from bus import EventBus
 from overlay_state import OverlayState
@@ -24,6 +25,67 @@ IMAGE_RESOLUTION = (1024, 576)
 # JPEG quality: high enough to preserve fine cabling/text, low enough to keep
 # the websocket / httpx payloads reasonable.
 JPEG_QUALITY = 88
+
+# Visual coordinate scaffold. We bake a labeled axis "ruler" into the model
+# input frame so it can read normalized coordinates directly off tick marks
+# instead of inventing them. This is the visual-prompting / Set-of-Mark
+# trick that consistently boosts spatial accuracy on Gemma / LLaVA-style
+# VLMs. Margins are added OUTSIDE the live image content so the scene
+# pixels are untouched and the model isn't tempted to interpret grid
+# lines as parts.
+RULER_MARGIN_PX = 36  # left + top padding where labels live
+RULER_BG = (24, 24, 24)  # dark neutral so labels pop and aren't mistaken for parts
+RULER_FG = (240, 240, 240)
+RULER_TICK_FG = (170, 200, 255)  # cool blue ticks differentiate from labels
+RULER_LABELS = [(0.0, "0.0"), (0.2, "0.2"), (0.4, "0.4"), (0.6, "0.6"), (0.8, "0.8"), (1.0, "1.0")]
+RULER_FAINT_GRID_ENABLED = bool(int(os.getenv("MODEL_INPUT_FAINT_GRID", "1")))
+
+
+def _add_coordinate_ruler(frame: np.ndarray) -> np.ndarray:
+    """Pad with a margin and draw axis labels + tick marks tied to 0..1 coords.
+
+    The model receives an image where the (0, 0)..(1, 1) coordinate system is
+    explicitly visible at the edges. After this transform the live scene
+    occupies pixels [RULER_MARGIN_PX:, RULER_MARGIN_PX:] and the labels in
+    the margin map directly onto normalized coords the model emits.
+    """
+    if frame is None or frame.size == 0:
+        return frame
+    h, w = frame.shape[:2]
+    out_w = w + RULER_MARGIN_PX
+    out_h = h + RULER_MARGIN_PX
+    canvas = np.full((out_h, out_w, 3), RULER_BG, dtype=np.uint8)
+    canvas[RULER_MARGIN_PX:, RULER_MARGIN_PX:] = frame
+
+    if RULER_FAINT_GRID_ENABLED:
+        for frac, _ in RULER_LABELS[1:-1]:
+            x = RULER_MARGIN_PX + int(round(frac * (w - 1)))
+            cv2.line(canvas, (x, RULER_MARGIN_PX), (x, out_h - 1), (60, 60, 60), 1)
+            y = RULER_MARGIN_PX + int(round(frac * (h - 1)))
+            cv2.line(canvas, (RULER_MARGIN_PX, y), (out_w - 1, y), (60, 60, 60), 1)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    label_scale = 0.42
+    label_thickness = 1
+    tick_len = 6
+
+    for frac, text in RULER_LABELS:
+        x = RULER_MARGIN_PX + int(round(frac * (w - 1)))
+        cv2.line(canvas, (x, RULER_MARGIN_PX - tick_len), (x, RULER_MARGIN_PX - 1), RULER_TICK_FG, 1)
+        (tw, th), _ = cv2.getTextSize(text, font, label_scale, label_thickness)
+        tx = max(2, min(out_w - tw - 2, x - tw // 2))
+        ty = RULER_MARGIN_PX - tick_len - 4
+        cv2.putText(canvas, text, (tx, ty), font, label_scale, RULER_FG, label_thickness, cv2.LINE_AA)
+
+    for frac, text in RULER_LABELS:
+        y = RULER_MARGIN_PX + int(round(frac * (h - 1)))
+        cv2.line(canvas, (RULER_MARGIN_PX - tick_len, y), (RULER_MARGIN_PX - 1, y), RULER_TICK_FG, 1)
+        (tw, th), _ = cv2.getTextSize(text, font, label_scale, label_thickness)
+        tx = max(2, RULER_MARGIN_PX - tick_len - tw - 4)
+        ty = max(th + 2, min(out_h - 2, y + th // 2))
+        cv2.putText(canvas, text, (tx, ty), font, label_scale, RULER_FG, label_thickness, cv2.LINE_AA)
+
+    return canvas
 
 # Ollama generation options. Vision models with structured JSON output are
 # very sensitive to temperature; gemma4's default is 1.0 which causes
@@ -110,6 +172,8 @@ class ModelManager:
         new_h = max(1, int(h * scale))
         if (new_w, new_h) != (w, h):
             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        frame = _add_coordinate_ruler(frame)
 
         ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
         if not ok:

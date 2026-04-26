@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 
 from bus import EventBus
-from model.gemma import IMAGE_RESOLUTION, ModelManager
+from model.gemma import IMAGE_RESOLUTION, RULER_MARGIN_PX, ModelManager
 
 
 class TestImageProcessing(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestImageProcessing(unittest.TestCase):
         manager = ModelManager(bus)
 
         # 1920x1080 source — should be downsized to fit IMAGE_RESOLUTION while
-        # keeping 16:9 aspect.
+        # keeping 16:9 aspect, then have the coordinate ruler margin tacked on.
         src = np.zeros((1080, 1920, 3), dtype=np.uint8)
         cv2.rectangle(src, (200, 200), (400, 400), (255, 255, 255), -1)
 
@@ -27,16 +27,22 @@ class TestImageProcessing(unittest.TestCase):
         decoded = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         target_w, target_h = IMAGE_RESOLUTION
-        self.assertLessEqual(decoded.shape[0], target_h)
-        self.assertLessEqual(decoded.shape[1], target_w)
+        self.assertLessEqual(decoded.shape[0], target_h + RULER_MARGIN_PX)
+        self.assertLessEqual(decoded.shape[1], target_w + RULER_MARGIN_PX)
 
-        # 16:9 aspect ratio must be preserved (within rounding).
-        aspect = decoded.shape[1] / decoded.shape[0]
+        # 16:9 aspect of the SCENE region (excluding the ruler margin).
+        scene_h = decoded.shape[0] - RULER_MARGIN_PX
+        scene_w = decoded.shape[1] - RULER_MARGIN_PX
+        aspect = scene_w / scene_h
         self.assertAlmostEqual(aspect, 16 / 9, places=1)
 
-        # Pure-black region of the source must remain (near-)black after our
-        # pipeline. Aggressive sharpening would inject ringing halos here.
-        flat_region = decoded[10:50, 10:50].mean()
+        # Pure-black region of the source must remain (near-)black inside the
+        # scene region after our pipeline. Aggressive sharpening would inject
+        # ringing halos here.
+        flat_region = decoded[
+            RULER_MARGIN_PX + 10 : RULER_MARGIN_PX + 50,
+            RULER_MARGIN_PX + 10 : RULER_MARGIN_PX + 50,
+        ].mean()
         self.assertLess(flat_region, 5.0, "pipeline should not introduce sharpening artifacts")
 
 

@@ -35,7 +35,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from model.context import ContextManager  # noqa: E402
-from model.gemma import GENERATION_OPTIONS, IMAGE_RESOLUTION, JPEG_QUALITY  # noqa: E402
+from model.gemma import (  # noqa: E402
+    GENERATION_OPTIONS,
+    IMAGE_RESOLUTION,
+    JPEG_QUALITY,
+    _add_coordinate_ruler,
+)
 
 
 def encode_image(path: Optional[Path]) -> str:
@@ -56,6 +61,7 @@ def encode_image(path: Optional[Path]) -> str:
     new_h = max(1, int(h * scale))
     if (new_w, new_h) != (w, h):
         frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    frame = _add_coordinate_ruler(frame)
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     if not ok:
         raise SystemExit("JPEG encoding failed")
@@ -154,6 +160,7 @@ async def main() -> None:
             milestones=formatted["milestones"],
             parts=formatted["parts"],
             current_objectives=formatted["current_objectives"],
+            active_overlays="none",
         )
         msgs = ctx.get_messages_payload(system)
         parsed = await run_turn(client, args.ollama_url, args.model, msgs, options, "TURN 1 — initial chat")
@@ -176,6 +183,7 @@ async def main() -> None:
                 milestones=formatted["milestones"],
                 parts=formatted["parts"],
                 current_objectives=formatted["current_objectives"],
+                active_overlays="none",
             )
             msgs = ctx.get_messages_payload(system, transient_user_message=snapshot_prompt)
             parsed = await run_turn(client, args.ollama_url, args.model, msgs, options, f"TURN {idx} — snapshot")
@@ -194,6 +202,7 @@ async def main() -> None:
                     milestones=formatted["milestones"],
                     parts=formatted["parts"],
                     current_objectives=formatted["current_objectives"],
+                    active_overlays="none",
                 )
                 msgs = ctx.get_messages_payload(system)
                 parsed = await run_turn(client, args.ollama_url, args.model, msgs, options, f"TURN {idx}.5 — user chat: {chat_text!r}")
