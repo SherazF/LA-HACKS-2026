@@ -7,10 +7,15 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <img id="webcam" alt="Camera feed" />
-    <canvas id="overlay"></canvas>
+    <div id="drag-surface" aria-hidden="true">
+      <img id="webcam" alt="Camera feed" />
+      <canvas id="overlay"></canvas>
+    </div>
 
     <div id="chat-panel">
+      <button id="collapse-toggle" type="button" aria-label="Collapse chat panel" aria-expanded="true">
+        <span class="chevron" aria-hidden="true">›</span>
+      </button>
       <div id="messages" aria-live="polite"></div>
       <div id="input-row">
         <textarea id="chat-input" rows="1" placeholder="Ask about your build..."></textarea>

@@ -21,6 +21,7 @@ const sendBtn = document.getElementById("send-btn");
 const voiceBtn = document.getElementById("voice-btn");
 const statusEl = document.getElementById("status");
 const chatPanel = document.getElementById("chat-panel");
+const collapseToggle = document.getElementById("collapse-toggle");
 const inputRow = document.getElementById("input-row");
 
 let isProcessing = false;
@@ -86,7 +87,7 @@ function setListeningState(value) {
   voiceBtn.classList.toggle("pulse", value);
   voiceBtn.setAttribute("aria-pressed", String(value));
   voiceBtn.textContent = value ? "🔴" : "🎤";
-  voiceBtn.title = value ? "Click to stop listening" : "Click to start voice input";
+  voiceBtn.title = value ? "Release to stop listening" : "Hold to start voice input";
   listeningIndicatorEl.classList.toggle("visible", value);
 }
 
@@ -109,6 +110,19 @@ function autosizeChatInput() {
 function resetChatInputHeight() {
   inputEl.style.height = "auto";
   inputEl.style.overflowY = "hidden";
+}
+
+function hasOpenSocket() {
+  return socket && socket.readyState === WebSocket.OPEN;
+}
+
+function updateCollapseToggle(isCollapsed) {
+  collapseToggle.setAttribute("aria-expanded", String(!isCollapsed));
+  collapseToggle.setAttribute(
+    "aria-label",
+    isCollapsed ? "Expand chat panel" : "Collapse chat panel",
+  );
+  collapseToggle.title = isCollapsed ? "Expand chat panel" : "Collapse chat panel";
 }
 
 function handleWsText(raw) {
@@ -155,6 +169,7 @@ function handleWsText(raw) {
     const currentText = inputEl.value;
     inputEl.value = currentText ? `${currentText} ${transcript}` : transcript;
     autosizeChatInput();
+    sendMessage();
   }
 }
 
@@ -466,25 +481,98 @@ function setupChat() {
   resetChatInputHeight();
 }
 
+function setupCollapseToggle() {
+  updateCollapseToggle(false);
+  collapseToggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const isCollapsed = chatPanel.classList.toggle("collapsed");
+    updateCollapseToggle(isCollapsed);
+  });
+}
+
 function setupVoiceInput() {
-  voiceBtn.title = "Click to start voice input";
-  voiceBtn.addEventListener("click", () => {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+  let activePointerId = null;
+
+  function startRecording() {
+    if (!hasOpenSocket()) {
       appendMessage("assistant", "Not connected to backend voice service.");
       return;
     }
 
     if (isListening) {
-      setListeningState(false);
-      socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
-    } else {
-      setListeningState(true);
-      socket.send(JSON.stringify({ v: 1, type: "voice_start" }));
+      return;
     }
+
+    setListeningState(true);
+    socket.send(JSON.stringify({ v: 1, type: "voice_start" }));
+  }
+
+  function stopRecording() {
+    if (!isListening) {
+      return;
+    }
+
+    setListeningState(false);
+    if (hasOpenSocket()) {
+      socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
+    }
+  }
+
+  voiceBtn.title = "Hold to start voice input";
+  voiceBtn.addEventListener("pointerdown", (event) => {
+    if (activePointerId !== null) {
+      return;
+    }
+
+    event.preventDefault();
+    activePointerId = event.pointerId;
+    voiceBtn.setPointerCapture(activePointerId);
+    startRecording();
+  });
+
+  voiceBtn.addEventListener("pointerup", (event) => {
+    if (activePointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    if (voiceBtn.hasPointerCapture(activePointerId)) {
+      voiceBtn.releasePointerCapture(activePointerId);
+    }
+    activePointerId = null;
+    stopRecording();
+  });
+
+  voiceBtn.addEventListener("pointercancel", (event) => {
+    if (activePointerId !== event.pointerId) {
+      return;
+    }
+
+    activePointerId = null;
+    stopRecording();
+  });
+
+  voiceBtn.addEventListener("keydown", (event) => {
+    if (event.key !== " " && event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    startRecording();
+  });
+
+  voiceBtn.addEventListener("keyup", (event) => {
+    if (event.key !== " " && event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    stopRecording();
   });
 
   window.addEventListener("beforeunload", () => {
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    if (hasOpenSocket()) {
       socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
     }
   });
@@ -495,7 +583,7 @@ function sendMessage() {
   if (!text) {
     return;
   }
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
+  if (!hasOpenSocket()) {
     appendMessage("assistant", "Not connected to the backend. Is the API running on port 8000?");
     return;
   }
@@ -520,6 +608,7 @@ video.addEventListener("error", () => {
 });
 
 setupChat();
+setupCollapseToggle();
 setupVoiceInput();
 setStatus(false);
 setListeningState(false);

@@ -103,8 +103,7 @@ class VoiceInputManager:
             await self._bus.emit(
                 "voice_error",
                 message=(
-                    "No speech detected. The microphone captured mostly silence "
-                    f"(level {rms}). Check mic input or speak closer."
+                    ""
                 ),
             )
             return

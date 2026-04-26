@@ -29,6 +29,7 @@ function createWindow() {
     width: 1200,
     height: 800,
     frame: false,
+    titleBarStyle: "hidden",
     transparent: false,
     backgroundColor: "#06080f",
     webPreferences: {
