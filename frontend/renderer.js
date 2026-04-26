@@ -214,7 +214,8 @@ function scoreVoice(voice) {
   if (/\bpremium\b/.test(name)) score += 40;
   if (/\benhanced\b/.test(name)) score += 35;
   if (/\b(eloquence|novelty|whisper|bells|cellos|bubbles|deranged|hysterical|trinoids|zarvox)\b/.test(name)) score -= 80;
-  if (/\b(samantha|ava|zoe|allison|susan|tom|evan|nicky|joelle|noelle|nathan|aaron|karen|serena|daniel)\b/.test(name)) score += 12;
+  if (/\bava\b/.test(name)) score += 30;
+  if (/\b(samantha|zoe|allison|susan|tom|evan|nicky|joelle|noelle|nathan|aaron|karen|serena|daniel)\b/.test(name)) score += 12;
   if (/\b(microsoft|espeak|google us english)\b/.test(name)) score -= 6;
   if (/compact/.test(name)) score -= 10;
   return score;
