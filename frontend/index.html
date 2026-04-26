@@ -10,6 +10,26 @@
     <div id="drag-surface" aria-hidden="true">
       <img id="webcam" alt="Camera feed" />
       <canvas id="overlay"></canvas>
+      <canvas id="model-view-canvas" aria-hidden="true"></canvas>
+    </div>
+
+    <button
+      id="model-view-toggle"
+      type="button"
+      aria-pressed="false"
+      title="Show model view"
+    >
+      <span class="dot" aria-hidden="true"></span>
+      <span class="label">Model view</span>
+    </button>
+
+    <div
+      id="pinned-instruction"
+      role="status"
+      aria-live="polite"
+      aria-hidden="true"
+    >
+      <span class="pinned-instruction-text"></span>
     </div>
 
     <div id="chat-panel">
@@ -20,7 +40,20 @@
       <div id="input-row">
         <textarea id="chat-input" rows="1" placeholder="Ask about your build..."></textarea>
         <button id="send-btn" type="button">Send</button>
-        <button id="voice-btn" type="button" aria-label="Voice input">🎤</button>
+        <button
+          id="tts-btn"
+          type="button"
+          aria-pressed="false"
+          aria-label="Toggle voice replies"
+          title="Toggle text-to-speech for replies"
+        >🔊</button>
+        <button
+          id="voice-btn"
+          type="button"
+          aria-pressed="false"
+          aria-label="Toggle hands-free voice input"
+          title="Toggle hands-free voice input"
+        >🎤</button>
       </div>
       <div id="status">Online</div>
     </div>

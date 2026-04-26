@@ -28,7 +28,8 @@ body {
 }
 
 #webcam,
-#overlay {
+#overlay,
+#model-view-canvas {
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -46,6 +47,96 @@ body {
 
 #overlay {
   z-index: 2;
+}
+
+#model-view-canvas {
+  z-index: 2;
+  background: #06080f;
+  object-fit: contain;
+  display: none;
+}
+
+body.model-view #webcam,
+body.model-view #overlay {
+  display: none;
+}
+
+body.model-view #model-view-canvas {
+  display: block;
+}
+
+#model-view-toggle {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(10, 10, 15, 0.45);
+  backdrop-filter: blur(40px) saturate(180%);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease, color 140ms ease;
+  -webkit-app-region: no-drag;
+}
+
+#model-view-toggle:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+#model-view-toggle .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(120, 220, 160, 0.55);
+  box-shadow: 0 0 10px rgba(120, 220, 160, 0.55);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+#model-view-toggle[aria-pressed="true"] {
+  background: rgba(255, 116, 80, 0.28);
+  border-color: rgba(255, 156, 110, 0.6);
+  color: #ffd6c4;
+}
+
+#model-view-toggle[aria-pressed="true"] .dot {
+  background: #ff8a55;
+  box-shadow: 0 0 14px rgba(255, 138, 85, 0.85);
+}
+
+#pinned-instruction {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 6;
+  max-width: min(420px, calc(100vw - 220px));
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(10, 10, 15, 0.5);
+  border: 1px solid rgba(130, 190, 255, 0.32);
+  backdrop-filter: blur(40px) saturate(200%);
+  color: rgba(255, 255, 255, 0.96);
+  font-size: 14px;
+  line-height: 1.4;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+
+#pinned-instruction.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 #chat-panel {
@@ -73,7 +164,7 @@ body {
 }
 
 #chat-panel.collapsed {
-  transform: translateX(calc(100% - 40px));
+  transform: translateX(calc(100% + 40px));
 }
 
 #chat-panel::before {
@@ -194,7 +285,7 @@ body {
 
 #input-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   gap: 8px;
   align-items: end;
 }
@@ -216,7 +307,8 @@ body {
 
 #chat-input,
 #send-btn,
-#voice-btn {
+#voice-btn,
+#tts-btn {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.1);
@@ -241,22 +333,40 @@ body {
 }
 
 #send-btn,
-#voice-btn {
-  min-width: 62px;
+#voice-btn,
+#tts-btn {
+  min-width: 52px;
   min-height: 46px;
   padding: 0 14px;
   cursor: pointer;
   transition: transform 140ms ease, background 140ms ease, opacity 140ms ease;
 }
 
-#voice-btn {
+#send-btn {
+  min-width: 62px;
+}
+
+#voice-btn,
+#tts-btn {
   background: rgba(126, 132, 150, 0.28);
 }
 
 #send-btn:hover,
-#voice-btn:hover {
+#voice-btn:hover,
+#tts-btn:hover {
   background: rgba(255, 255, 255, 0.2);
   transform: translateY(-1px);
+}
+
+#tts-btn[aria-pressed="true"] {
+  background: rgba(94, 196, 138, 0.36);
+  border-color: rgba(120, 220, 160, 0.7);
+  box-shadow: 0 0 14px rgba(94, 196, 138, 0.45);
+}
+
+#tts-btn.speaking {
+  background: rgba(94, 196, 138, 0.5);
+  animation: tts-pulse 0.9s ease-in-out infinite;
 }
 
 #voice-btn.listening {
@@ -266,6 +376,11 @@ body {
 #voice-btn.thinking {
   background: rgba(92, 150, 255, 0.32);
   opacity: 0.7;
+}
+
+#voice-btn[aria-pressed="true"]:not(.listening):not(.thinking) {
+  background: rgba(255, 196, 110, 0.32);
+  border-color: rgba(255, 196, 110, 0.7);
 }
 
 #voice-btn.show-wave::after {
@@ -361,6 +476,16 @@ body {
   }
   100% {
     box-shadow: 0 0 10px rgba(255, 0, 0, 0.25);
+  }
+}
+
+@keyframes tts-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 6px rgba(94, 196, 138, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(94, 196, 138, 0.8);
   }
 }
 

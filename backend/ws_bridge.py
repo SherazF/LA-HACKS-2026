@@ -98,8 +98,15 @@ class WebSocketBridge:
     async def _on_voice_error(self, message: str) -> None:
         await self._manager.broadcast_json({"v": 1, "type": "voice_error", "message": message})
 
-    async def _on_voice_state(self, listening: bool) -> None:
-        await self._manager.broadcast_json({"v": 1, "type": "voice_state", "listening": bool(listening)})
+    async def _on_voice_state(self, listening: bool, mode: str = "manual") -> None:
+        await self._manager.broadcast_json(
+            {
+                "v": 1,
+                "type": "voice_state",
+                "listening": bool(listening),
+                "mode": mode,
+            }
+        )
 
 
 async def run_camera_frame_stream(
@@ -173,7 +180,10 @@ async def handle_websocket(
                     frame = websocket.app.state.camera.get_latest_frame()
                     await bus.emit("chat_input", text=text, frame=frame)
             elif mtype == "voice_start":
-                await bus.emit("voice_start")
+                mode = (msg.get("mode") or "manual").lower()
+                if mode not in ("manual", "auto"):
+                    mode = "manual"
+                await bus.emit("voice_start", mode=mode)
             elif mtype == "voice_stop":
                 await bus.emit("voice_stop")
             else:

@@ -14,11 +14,19 @@ const wsUrl = () => {
 const video = document.getElementById("webcam");
 const overlay = document.getElementById("overlay");
 const ctx = overlay.getContext("2d");
+const modelViewCanvas = document.getElementById("model-view-canvas");
+const modelViewCtx = modelViewCanvas.getContext("2d");
 
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("chat-input");
 const sendBtn = document.getElementById("send-btn");
 const voiceBtn = document.getElementById("voice-btn");
+const ttsBtn = document.getElementById("tts-btn");
+const modelViewToggle = document.getElementById("model-view-toggle");
+const pinnedInstructionEl = document.getElementById("pinned-instruction");
+const pinnedInstructionText = pinnedInstructionEl.querySelector(
+  ".pinned-instruction-text",
+);
 const statusEl = document.getElementById("status");
 const chatPanel = document.getElementById("chat-panel");
 const collapseToggle = document.getElementById("collapse-toggle");
@@ -35,8 +43,26 @@ let lastObjectUrl = null;
 let pingIntervalId = 0;
 let reconnectTimer = 0;
 let pendingUserAnalyses = 0;
+
+let autoListenEnabled = false;
+let waitingForReply = false;
+let voiceArmTimer = 0;
+
+let ttsEnabled = false;
+let ttsSpeaking = false;
+
+let modelViewEnabled = false;
+const lastFrameImage = new Image();
+let lastFrameLoaded = false;
+const MODEL_VIEW_W = 1024;
+const MODEL_VIEW_H = 576;
+
+let chatCollapsed = false;
+let latestAssistantText = "";
+
 const ANALYSIS_TIMEOUT_MS = 45000;
 const CHAT_INPUT_MAX_HEIGHT = 200;
+const VOICE_REARM_DELAY_MS = 350;
 
 const offlineBadge = document.createElement("div");
 offlineBadge.id = "offline-badge";
@@ -80,15 +106,38 @@ function setProcessingState(value) {
   }
 }
 
+function refreshVoiceButtonVisuals() {
+  voiceBtn.classList.toggle("listening", isListening);
+  voiceBtn.classList.toggle("show-wave", isListening);
+  voiceBtn.classList.toggle("pulse", isListening);
+  voiceBtn.setAttribute(
+    "aria-pressed",
+    String(autoListenEnabled || isListening),
+  );
+  if (isListening) {
+    voiceBtn.textContent = "🔴";
+    voiceBtn.title = "Listening — click to stop the loop";
+  } else if (autoListenEnabled && waitingForReply) {
+    voiceBtn.textContent = "💬";
+    voiceBtn.title = "Waiting for the model — click to stop the loop";
+  } else if (autoListenEnabled) {
+    voiceBtn.textContent = "🟠";
+    voiceBtn.title = "Hands-free voice on — click to stop";
+  } else {
+    voiceBtn.textContent = "🎤";
+    voiceBtn.title = "Click to start hands-free voice";
+  }
+  listeningIndicatorEl.classList.toggle("visible", isListening);
+  listeningIndicatorEl.textContent = isListening
+    ? "Listening — speak now"
+    : autoListenEnabled && waitingForReply
+      ? "Thinking..."
+      : "";
+}
+
 function setListeningState(value) {
-  isListening = value;
-  voiceBtn.classList.toggle("listening", value);
-  voiceBtn.classList.toggle("show-wave", value);
-  voiceBtn.classList.toggle("pulse", value);
-  voiceBtn.setAttribute("aria-pressed", String(value));
-  voiceBtn.textContent = value ? "🔴" : "🎤";
-  voiceBtn.title = value ? "Release to stop listening" : "Hold to start voice input";
-  listeningIndicatorEl.classList.toggle("visible", value);
+  isListening = Boolean(value);
+  refreshVoiceButtonVisuals();
 }
 
 function appendMessage(role, text) {
@@ -103,7 +152,8 @@ function autosizeChatInput() {
   inputEl.style.height = "auto";
   const nextHeight = Math.min(inputEl.scrollHeight, CHAT_INPUT_MAX_HEIGHT);
   inputEl.style.height = `${nextHeight}px`;
-  inputEl.style.overflowY = inputEl.scrollHeight > CHAT_INPUT_MAX_HEIGHT ? "auto" : "hidden";
+  inputEl.style.overflowY =
+    inputEl.scrollHeight > CHAT_INPUT_MAX_HEIGHT ? "auto" : "hidden";
   inputEl.scrollTop = inputEl.scrollHeight;
 }
 
@@ -116,13 +166,136 @@ function hasOpenSocket() {
   return socket && socket.readyState === WebSocket.OPEN;
 }
 
+function updatePinnedInstruction() {
+  const shouldShow = chatCollapsed && Boolean(latestAssistantText);
+  pinnedInstructionText.textContent = latestAssistantText || "";
+  pinnedInstructionEl.classList.toggle("visible", shouldShow);
+  pinnedInstructionEl.setAttribute("aria-hidden", String(!shouldShow));
+}
+
+function recordAssistantMessage(text) {
+  if (!text) {
+    return;
+  }
+  latestAssistantText = text;
+  updatePinnedInstruction();
+}
+
 function updateCollapseToggle(isCollapsed) {
+  chatCollapsed = isCollapsed;
   collapseToggle.setAttribute("aria-expanded", String(!isCollapsed));
   collapseToggle.setAttribute(
     "aria-label",
     isCollapsed ? "Expand chat panel" : "Collapse chat panel",
   );
-  collapseToggle.title = isCollapsed ? "Expand chat panel" : "Collapse chat panel";
+  collapseToggle.title = isCollapsed
+    ? "Expand chat panel"
+    : "Collapse chat panel";
+  updatePinnedInstruction();
+}
+
+function speakResponse(text) {
+  if (!ttsEnabled || !text) {
+    return;
+  }
+  if (!("speechSynthesis" in window)) {
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.05;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+    ttsSpeaking = true;
+    ttsBtn.classList.add("speaking");
+    utter.onend = () => {
+      ttsSpeaking = false;
+      ttsBtn.classList.remove("speaking");
+      maybeRearmVoiceAfterReply();
+    };
+    utter.onerror = () => {
+      ttsSpeaking = false;
+      ttsBtn.classList.remove("speaking");
+      maybeRearmVoiceAfterReply();
+    };
+    window.speechSynthesis.speak(utter);
+  } catch (e) {
+    console.warn("TTS failed", e);
+    ttsSpeaking = false;
+    ttsBtn.classList.remove("speaking");
+  }
+}
+
+function handleAssistantText(text) {
+  appendMessage("assistant", text);
+  recordAssistantMessage(text);
+  if (ttsEnabled) {
+    speakResponse(text);
+  } else {
+    maybeRearmVoiceAfterReply();
+  }
+}
+
+function maybeRearmVoiceAfterReply() {
+  if (!autoListenEnabled) {
+    waitingForReply = false;
+    refreshVoiceButtonVisuals();
+    return;
+  }
+  if (ttsSpeaking) {
+    return;
+  }
+  waitingForReply = false;
+  if (voiceArmTimer) {
+    clearTimeout(voiceArmTimer);
+  }
+  voiceArmTimer = window.setTimeout(() => {
+    voiceArmTimer = 0;
+    if (autoListenEnabled && !isListening && !waitingForReply) {
+      startAutoListenTurn();
+    }
+  }, VOICE_REARM_DELAY_MS);
+  refreshVoiceButtonVisuals();
+}
+
+function startAutoListenTurn() {
+  if (!hasOpenSocket()) {
+    appendMessage(
+      "assistant",
+      "Lost connection to the backend voice service.",
+    );
+    autoListenEnabled = false;
+    refreshVoiceButtonVisuals();
+    return;
+  }
+  if (isListening) {
+    return;
+  }
+  socket.send(
+    JSON.stringify({ v: 1, type: "voice_start", mode: "auto" }),
+  );
+}
+
+function stopAutoListen({ silent = false } = {}) {
+  autoListenEnabled = false;
+  waitingForReply = false;
+  if (voiceArmTimer) {
+    clearTimeout(voiceArmTimer);
+    voiceArmTimer = 0;
+  }
+  if (hasOpenSocket() && isListening) {
+    socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
+  }
+  if ("speechSynthesis" in window && ttsSpeaking) {
+    window.speechSynthesis.cancel();
+    ttsSpeaking = false;
+    ttsBtn.classList.remove("speaking");
+  }
+  if (!silent) {
+    setListeningState(false);
+  }
+  refreshVoiceButtonVisuals();
 }
 
 function handleWsText(raw) {
@@ -144,11 +317,11 @@ function handleWsText(raw) {
     return;
   }
   if (t === "chat_response" && typeof msg.text === "string") {
-    appendMessage("assistant", msg.text);
+    handleAssistantText(msg.text);
     return;
   }
   if (t === "vision_result" && typeof msg.text === "string") {
-    appendMessage("assistant", `${msg.text}`);
+    handleAssistantText(msg.text);
     return;
   }
   if (t === "voice_state") {
@@ -157,19 +330,44 @@ function handleWsText(raw) {
   }
   if (t === "voice_error" && msg.message) {
     setListeningState(false);
-    appendMessage("assistant", msg.message);
+    if (msg.message) {
+      appendMessage("assistant", msg.message);
+    }
+    if (autoListenEnabled) {
+      // Common case: brief "no speech" timeout. Re-arm so the user can
+      // just keep going without clicking again.
+      maybeRearmVoiceAfterReply();
+    } else {
+      refreshVoiceButtonVisuals();
+    }
     return;
   }
   if (t === "voice_transcript" && typeof msg.text === "string") {
     setListeningState(false);
     const transcript = msg.text.trim();
     if (!transcript) {
+      if (autoListenEnabled) {
+        maybeRearmVoiceAfterReply();
+      }
       return;
     }
-    const currentText = inputEl.value;
-    inputEl.value = currentText ? `${currentText} ${transcript}` : transcript;
-    autosizeChatInput();
-    sendMessage();
+    if (autoListenEnabled) {
+      // Hands-free path: skip the input box, send straight to chat and
+      // wait for the model's reply before re-arming the mic.
+      waitingForReply = true;
+      appendMessage("user", transcript);
+      socket.send(
+        JSON.stringify({ v: 1, type: "chat", text: transcript }),
+      );
+      refreshVoiceButtonVisuals();
+    } else {
+      const currentText = inputEl.value;
+      inputEl.value = currentText
+        ? `${currentText} ${transcript}`
+        : transcript;
+      autosizeChatInput();
+      sendMessage();
+    }
   }
 }
 
@@ -179,6 +377,65 @@ function setFeedFromBlob(blob) {
   }
   lastObjectUrl = URL.createObjectURL(blob);
   video.src = lastObjectUrl;
+  lastFrameImage.onload = () => {
+    lastFrameLoaded = true;
+    if (modelViewEnabled) {
+      drawModelView();
+    }
+  };
+  lastFrameImage.src = lastObjectUrl;
+}
+
+function resizeModelViewCanvas() {
+  modelViewCanvas.width = window.innerWidth;
+  modelViewCanvas.height = window.innerHeight;
+  if (modelViewEnabled) {
+    drawModelView();
+  }
+}
+
+function drawModelView() {
+  const cw = modelViewCanvas.width;
+  const ch = modelViewCanvas.height;
+  modelViewCtx.fillStyle = "#06080f";
+  modelViewCtx.fillRect(0, 0, cw, ch);
+  if (!lastFrameLoaded) {
+    return;
+  }
+  const ratio = MODEL_VIEW_W / MODEL_VIEW_H;
+  let drawW = cw;
+  let drawH = Math.round(cw / ratio);
+  if (drawH > ch) {
+    drawH = ch;
+    drawW = Math.round(ch * ratio);
+  }
+  const offX = Math.floor((cw - drawW) / 2);
+  const offY = Math.floor((ch - drawH) / 2);
+  modelViewCtx.imageSmoothingEnabled = true;
+  modelViewCtx.imageSmoothingQuality = "low";
+  modelViewCtx.drawImage(lastFrameImage, offX, offY, drawW, drawH);
+  modelViewCtx.fillStyle = "rgba(0,0,0,0.55)";
+  modelViewCtx.fillRect(offX + 12, offY + 12, 220, 26);
+  modelViewCtx.fillStyle = "rgba(255,255,255,0.92)";
+  modelViewCtx.font =
+    "12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  modelViewCtx.fillText(
+    `Model view · ${MODEL_VIEW_W}×${MODEL_VIEW_H} JPEG q=88`,
+    offX + 22,
+    offY + 30,
+  );
+}
+
+function setModelViewEnabled(enabled) {
+  modelViewEnabled = Boolean(enabled);
+  document.body.classList.toggle("model-view", modelViewEnabled);
+  modelViewToggle.setAttribute("aria-pressed", String(modelViewEnabled));
+  modelViewToggle.title = modelViewEnabled
+    ? "Hide model view"
+    : "Show model view";
+  if (modelViewEnabled) {
+    drawModelView();
+  }
 }
 
 function connectWebSocket() {
@@ -258,6 +515,13 @@ function connectWebSocket() {
     backendOnline = false;
     setStatus(false);
     updateOfflineBadge();
+    setListeningState(false);
+    if (autoListenEnabled) {
+      // The loop can't continue without the socket; pause and re-arm on
+      // reconnect.
+      autoListenEnabled = false;
+      refreshVoiceButtonVisuals();
+    }
     scheduleReconnect();
   };
 }
@@ -362,7 +626,7 @@ function buildFrameData() {
   return {
     dataUrl: bufferCanvas.toDataURL("image/jpeg", 0.82),
     width: targetWidth,
-    height: targetHeight
+    height: targetHeight,
   };
 }
 
@@ -387,7 +651,7 @@ function normalizeDetections(detections, sourceWidth, sourceHeight) {
       x: x * scaleX,
       y: y * scaleY,
       width: width * scaleX,
-      height: height * scaleY
+      height: height * scaleY,
     };
   });
 }
@@ -423,7 +687,10 @@ async function analyzeFrame(options = {}) {
   }
 
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(
+    () => controller.abort(),
+    ANALYSIS_TIMEOUT_MS,
+  );
 
   setProcessingState(true);
   try {
@@ -431,7 +698,7 @@ async function analyzeFrame(options = {}) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ image: frame.dataUrl }),
-      signal: controller.signal
+      signal: controller.signal,
     });
     hasLoggedOfflineWarning = false;
 
@@ -492,89 +759,62 @@ function setupCollapseToggle() {
 }
 
 function setupVoiceInput() {
-  let activePointerId = null;
-
-  function startRecording() {
+  voiceBtn.title = "Click to start hands-free voice";
+  voiceBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (autoListenEnabled || isListening) {
+      stopAutoListen();
+      return;
+    }
     if (!hasOpenSocket()) {
       appendMessage("assistant", "Not connected to backend voice service.");
       return;
     }
-
-    if (isListening) {
-      return;
-    }
-
-    setListeningState(true);
-    socket.send(JSON.stringify({ v: 1, type: "voice_start" }));
-  }
-
-  function stopRecording() {
-    if (!isListening) {
-      return;
-    }
-
-    setListeningState(false);
-    if (hasOpenSocket()) {
-      socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
-    }
-  }
-
-  voiceBtn.title = "Hold to start voice input";
-  voiceBtn.addEventListener("pointerdown", (event) => {
-    if (activePointerId !== null) {
-      return;
-    }
-
-    event.preventDefault();
-    activePointerId = event.pointerId;
-    voiceBtn.setPointerCapture(activePointerId);
-    startRecording();
-  });
-
-  voiceBtn.addEventListener("pointerup", (event) => {
-    if (activePointerId !== event.pointerId) {
-      return;
-    }
-
-    event.preventDefault();
-    if (voiceBtn.hasPointerCapture(activePointerId)) {
-      voiceBtn.releasePointerCapture(activePointerId);
-    }
-    activePointerId = null;
-    stopRecording();
-  });
-
-  voiceBtn.addEventListener("pointercancel", (event) => {
-    if (activePointerId !== event.pointerId) {
-      return;
-    }
-
-    activePointerId = null;
-    stopRecording();
+    autoListenEnabled = true;
+    waitingForReply = false;
+    refreshVoiceButtonVisuals();
+    startAutoListenTurn();
   });
 
   voiceBtn.addEventListener("keydown", (event) => {
     if (event.key !== " " && event.key !== "Enter") {
       return;
     }
-
     event.preventDefault();
-    startRecording();
-  });
-
-  voiceBtn.addEventListener("keyup", (event) => {
-    if (event.key !== " " && event.key !== "Enter") {
-      return;
-    }
-
-    event.preventDefault();
-    stopRecording();
+    voiceBtn.click();
   });
 
   window.addEventListener("beforeunload", () => {
-    if (hasOpenSocket()) {
+    if (hasOpenSocket() && (autoListenEnabled || isListening)) {
       socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
     }
+  });
+}
+
+function setupTtsToggle() {
+  ttsBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    ttsEnabled = !ttsEnabled;
+    ttsBtn.setAttribute("aria-pressed", String(ttsEnabled));
+    ttsBtn.title = ttsEnabled
+      ? "Voice replies on — click to mute"
+      : "Toggle text-to-speech for replies";
+    if (!ttsEnabled && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      ttsSpeaking = false;
+      ttsBtn.classList.remove("speaking");
+      // Spoken-reply listener was the gate for re-arm; if user just turned
+      // off TTS while a reply was waiting, re-arm now.
+      maybeRearmVoiceAfterReply();
+    }
+  });
+}
+
+function setupModelViewToggle() {
+  resizeModelViewCanvas();
+  modelViewToggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    setModelViewEnabled(!modelViewEnabled);
   });
 }
 
@@ -584,7 +824,10 @@ function sendMessage() {
     return;
   }
   if (!hasOpenSocket()) {
-    appendMessage("assistant", "Not connected to the backend. Is the API running on port 8000?");
+    appendMessage(
+      "assistant",
+      "Not connected to the backend. Is the API running on port 8000?",
+    );
     return;
   }
   inputEl.value = "";
@@ -601,7 +844,10 @@ function animateOverlay(now) {
   requestAnimationFrame(animateOverlay);
 }
 
-window.addEventListener("resize", resizeOverlay);
+window.addEventListener("resize", () => {
+  resizeOverlay();
+  resizeModelViewCanvas();
+});
 video.addEventListener("load", resizeOverlay);
 video.addEventListener("error", () => {
   setStatus(!!(socket && socket.readyState === WebSocket.OPEN));
@@ -610,13 +856,17 @@ video.addEventListener("error", () => {
 setupChat();
 setupCollapseToggle();
 setupVoiceInput();
+setupTtsToggle();
+setupModelViewToggle();
 setStatus(false);
 setListeningState(false);
 updateOfflineBadge();
 connectWebSocket();
 
-// Initial welcome message
-appendMessage("assistant", "System initialized. Please describe your current build status or what you're working on to begin.");
+const welcome =
+  "System initialized. Please describe your current build status or what you're working on to begin.";
+appendMessage("assistant", welcome);
+recordAssistantMessage(welcome);
 
 requestAnimationFrame(animateOverlay);
 setInterval(() => analyzeFrame({ userInitiated: false }), 3000);
