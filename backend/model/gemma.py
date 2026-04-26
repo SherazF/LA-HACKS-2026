@@ -70,7 +70,7 @@ class ModelManager:
             return
 
         # Resize to 256x256 to save context space
-        frame = cv2.resize(frame, (512, 512), interpolation=cv2.INTER_AREA)
+        frame = cv2.resize(frame, (400, 400), interpolation=cv2.INTER_AREA)
 
         # Apply sharpening using Unsharp Masking (pure OpenCV approach)
         # This enhances edges which helps the model identify components in smaller images
