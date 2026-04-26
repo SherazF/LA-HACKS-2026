@@ -1,4 +1,5 @@
 Analyze the current camera frame against the build state in the system prompt.
+Only report if you observe something new, incorrect, or actionable.
 If there is nothing new to report, respond with exactly "empty".
 If reporting, be brief (1-2 sentences max).
 Only add overlay_operations if you can point to a specific visible error.

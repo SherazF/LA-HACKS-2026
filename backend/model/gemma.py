@@ -218,7 +218,9 @@ class ModelManager:
                     result = response.json()
                     content = result.get("message", {}).get("content", "")
                     try:
-                        return json.loads(content)
+                        parsed = json.loads(content)
+                        logger.info(f"Full model response: {json.dumps(parsed, indent=2)}")
+                        return parsed
                     except json.JSONDecodeError:
                         logger.warning(
                             f"Attempt {attempt + 1}: Failed to parse JSON content: {content}"
