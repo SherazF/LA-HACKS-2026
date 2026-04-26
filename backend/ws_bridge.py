@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Optional, Set
 
 import cv2
@@ -11,6 +12,8 @@ from camera import CameraStream
 from overlay_state import OverlayState, render_overlays
 
 logger = logging.getLogger(__name__)
+
+CAMERA_STREAM_JPEG_QUALITY = int(os.getenv("CAMERA_STREAM_JPEG_QUALITY", "92"))
 
 
 class ConnectionManager:
@@ -126,7 +129,11 @@ async def run_camera_frame_stream(
             frame = camera.get_latest_frame()
             if frame is not None:
                 vis = render_overlays(frame, overlay_state)
-                ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                ok, buf = cv2.imencode(
+                    ".jpg",
+                    vis,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), CAMERA_STREAM_JPEG_QUALITY],
+                )
                 if ok:
                     await manager.broadcast_bytes(buf.tobytes())
         try:

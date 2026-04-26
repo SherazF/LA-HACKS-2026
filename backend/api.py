@@ -31,7 +31,7 @@ OLLAMA_PORT = os.getenv("OLLAMA_PORT", "11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b")
 CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "0"))
 SNAPSHOT_INTERVAL = float(os.getenv("SNAPSHOT_INTERVAL", "15.0"))
-CAMERA_STREAM_FPS = float(os.getenv("CAMERA_STREAM_FPS", "12"))
+CAMERA_STREAM_FPS = float(os.getenv("CAMERA_STREAM_FPS", "24"))
 
 
 def _truthy(name: str, default: str = "0") -> bool:

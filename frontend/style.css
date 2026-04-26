@@ -41,7 +41,8 @@ body {
 }
 
 #webcam {
-  object-fit: cover;
+  object-fit: contain;
+  background: #06080f;
   z-index: 1;
 }
 

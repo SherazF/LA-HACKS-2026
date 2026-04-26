@@ -30,10 +30,19 @@ VOICE_PREFER_BUILTIN_MIC = os.getenv("VOICE_PREFER_BUILTIN_MIC", "1").lower() in
 # Silence-based end-of-speech detection used when frontend opens the mic in
 # "auto" mode (the always-on voice loop). Tuned for natural pauses in spoken
 # English: ~1s of silence after speech ends a turn.
+#
+# IMPORTANT: VOICE_AUTO_SILENCE_RMS is a SEPARATE, higher threshold than
+# VOICE_MIN_RMS. VOICE_MIN_RMS gates whether the whole recording is loud
+# enough to bother transcribing; VOICE_AUTO_SILENCE_RMS gates whether each
+# individual chunk counts as "the user has stopped talking". Ambient room
+# noise (HVAC, fans, breathing) easily clears 80-150 RMS, so set this above
+# the noise floor of the room the mic is in.
 VOICE_AUTO_SILENCE_MS = int(os.getenv("VOICE_AUTO_SILENCE_MS", "1000"))
 VOICE_AUTO_MIN_SPEECH_MS = int(os.getenv("VOICE_AUTO_MIN_SPEECH_MS", "300"))
 VOICE_AUTO_MAX_SECONDS = float(os.getenv("VOICE_AUTO_MAX_SECONDS", "20"))
 VOICE_AUTO_NO_SPEECH_TIMEOUT_S = float(os.getenv("VOICE_AUTO_NO_SPEECH_TIMEOUT_S", "12"))
+VOICE_AUTO_SILENCE_RMS = int(os.getenv("VOICE_AUTO_SILENCE_RMS", "450"))
+VOICE_AUTO_SPEECH_RMS = int(os.getenv("VOICE_AUTO_SPEECH_RMS", "650"))
 
 
 class VoiceInputManager:
@@ -213,10 +222,19 @@ class VoiceInputManager:
             max_chunks = max(1, int(round(VOICE_AUTO_MAX_SECONDS / chunk_seconds)))
             no_speech_chunk_limit = max(1, int(round(VOICE_AUTO_NO_SPEECH_TIMEOUT_S / chunk_seconds)))
 
+            # Use a HIGHER threshold to detect "this chunk is speech" vs
+            # "this chunk is silence" than the bottom-line VOICE_MIN_RMS used
+            # downstream. Ambient room noise routinely sits at ~100-300 RMS;
+            # if we treat that as speech, the silence counter never advances
+            # and the loop never auto-stops.
+            speech_threshold = max(VOICE_AUTO_SPEECH_RMS, VOICE_AUTO_SILENCE_RMS)
+            silence_threshold = VOICE_AUTO_SILENCE_RMS
+
             speech_chunks = 0
             silence_chunks = 0
             speech_locked = False
             chunk_count = 0
+            peak_rms = 0
             auto = (self._mode == "auto")
 
             while not self._stop_event.is_set():
@@ -228,24 +246,41 @@ class VoiceInputManager:
                     continue
 
                 rms = self._chunk_rms(chunk, sample_width)
-                if rms >= VOICE_MIN_RMS:
+                if rms > peak_rms:
+                    peak_rms = rms
+
+                if rms >= speech_threshold:
                     speech_chunks += 1
                     silence_chunks = 0
                     if speech_chunks >= speech_target:
                         speech_locked = True
-                else:
+                elif rms < silence_threshold:
                     if speech_locked:
                         silence_chunks += 1
                         if silence_chunks >= silence_target:
                             break
                     elif speech_chunks > 0:
                         speech_chunks = max(0, speech_chunks - 1)
+                # rms in the [silence_threshold, speech_threshold) hysteresis
+                # band is treated as "ambient" — neither resets silence nor
+                # counts as new speech. Keeps borderline noise from extending
+                # the turn forever.
 
                 if chunk_count >= max_chunks:
                     break
                 if not speech_locked and chunk_count >= no_speech_chunk_limit:
                     self._auto_no_speech = True
                     break
+
+            if auto:
+                logger.info(
+                    "Auto capture done: chunks=%d speech_locked=%s peak_rms=%d silence_thr=%d speech_thr=%d",
+                    chunk_count,
+                    speech_locked,
+                    peak_rms,
+                    silence_threshold,
+                    speech_threshold,
+                )
 
             self._sample_rate = sample_rate
             self._sample_width = sample_width
