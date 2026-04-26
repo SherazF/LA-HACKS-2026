@@ -145,6 +145,7 @@ function handleWsText(raw) {
     return;
   }
   if (t === "voice_transcript" && typeof msg.text === "string") {
+    setListeningState(false);
     const transcript = msg.text.trim();
     if (!transcript) {
       return;
@@ -466,17 +467,16 @@ function setupChat() {
 function setupVoiceInput() {
   voiceBtn.title = "Click to start voice input";
   voiceBtn.addEventListener("click", () => {
-    if (isProcessing) {
-      return;
-    }
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       appendMessage("assistant", "Not connected to backend voice service.");
       return;
     }
 
     if (isListening) {
+      setListeningState(false);
       socket.send(JSON.stringify({ v: 1, type: "voice_stop" }));
     } else {
+      setListeningState(true);
       socket.send(JSON.stringify({ v: 1, type: "voice_start" }));
     }
   });
