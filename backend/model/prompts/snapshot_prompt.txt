@@ -1,13 +1,12 @@
-Analyze the current camera frame against the build state in the system prompt.
+A new camera frame just arrived. Look at it carefully and respond once, following the JSON schema in the system prompt.
 
-Specifically check in this order:
-1. Have any current_objectives been completed or partially completed?
-2. Are any known parts newly visible that weren't previously in "parts"?
-3. Is anything incorrect, misaligned, or potentially dangerous?
-4. Is there any actionable guidance that would help the user right now?
+Walk through these checks silently before answering:
+1. Compare the frame to the previous Parts/Milestones/Current Objectives.
+2. Did the user just complete one of the current objectives? If yes, say so briefly and move that objective into milestones.
+3. Is a Known Part newly visible that wasn't in "parts" yet? If yes, add it and mention it.
+4. Is anything visibly wrong, dangerous, or about to be installed incorrectly (bent pins, wrong slot, reversed connector, missing standoff)? If yes, warn the user in 1 sentence.
+5. Is there a small, useful tip that fits the user's CURRENT action in the frame? If yes, share it.
 
-If ANY of the above are true, report it. Be brief — 1-2 sentences max.
-Only respond "empty" if none of the above are true and the scene is unchanged.
+If none of the above apply and the scene is essentially unchanged, set "response" to exactly "empty" and leave the state fields the same as before.
 
-When you need to point to a specific location, add overlay_operations.
-Only use overlays for specific errors or precise placement guidance — not for general commentary.
+Do NOT narrate the scene. Do NOT repeat advice you have already given. Speak only when you have something useful and new.
