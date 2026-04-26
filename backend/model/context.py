@@ -36,7 +36,7 @@ class ContextManager:
 
         # Strategy:
         # 1. Strictly limit to 2 images max
-        while len(self.image_buffer) > 2:
+        while len(self.image_buffer) > 1:
             self.image_buffer.pop(0)
             logger.debug("Pruned image to maintain strict 2-image limit")
 
