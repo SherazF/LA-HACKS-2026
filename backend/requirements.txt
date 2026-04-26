@@ -5,3 +5,5 @@ numpy
 fastapi
 uvicorn[standard]
 python-multipart
+SpeechRecognition
+PyAudio

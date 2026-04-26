@@ -78,6 +78,9 @@ class WebSocketBridge:
             return
         self._bus.subscribe("vision_result", self._on_vision_result)
         self._bus.subscribe("chat_response", self._on_chat_response)
+        self._bus.subscribe("voice_transcript", self._on_voice_transcript)
+        self._bus.subscribe("voice_error", self._on_voice_error)
+        self._bus.subscribe("voice_state", self._on_voice_state)
         self._registered = True
 
     async def _on_vision_result(self, text: str) -> None:
@@ -85,6 +88,15 @@ class WebSocketBridge:
 
     async def _on_chat_response(self, text: str) -> None:
         await self._manager.broadcast_json({"v": 1, "type": "chat_response", "text": text})
+
+    async def _on_voice_transcript(self, text: str) -> None:
+        await self._manager.broadcast_json({"v": 1, "type": "voice_transcript", "text": text})
+
+    async def _on_voice_error(self, message: str) -> None:
+        await self._manager.broadcast_json({"v": 1, "type": "voice_error", "message": message})
+
+    async def _on_voice_state(self, listening: bool) -> None:
+        await self._manager.broadcast_json({"v": 1, "type": "voice_state", "listening": bool(listening)})
 
 
 async def run_camera_frame_stream(
@@ -150,6 +162,10 @@ async def handle_websocket(
                 text = (msg.get("text") or "").strip()
                 if text:
                     await bus.emit("chat_input", text=text)
+            elif mtype == "voice_start":
+                await bus.emit("voice_start")
+            elif mtype == "voice_stop":
+                await bus.emit("voice_stop")
             else:
                 await manager.send_json(
                     websocket,
