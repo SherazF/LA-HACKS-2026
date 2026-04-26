@@ -30,8 +30,8 @@ JPEG_QUALITY = 88
 # hallucinations and broken JSON. Lower temp + lower top_p stabilizes both
 # the JSON shape and the visual reasoning. num_predict caps runaway monologues.
 GENERATION_OPTIONS = {
-    "temperature": 0.2,
-    "top_p": 0.9,
+    "temperature": 0.15,
+    "top_p": 0.85,
     "top_k": 40,
     "repeat_penalty": 1.1,
     "num_predict": 512,
