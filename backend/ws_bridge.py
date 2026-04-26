@@ -1,13 +1,14 @@
 import asyncio
 import json
 import logging
-from typing import Set
+from typing import Optional, Set
 
 import cv2
 from fastapi import WebSocket, WebSocketDisconnect
 
 from bus import EventBus
 from camera import CameraStream
+from overlay_state import OverlayState, render_overlays
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +107,19 @@ async def run_camera_frame_stream(
     camera: CameraStream,
     shutdown: asyncio.Event,
     fps: float,
+    overlay_state: Optional[OverlayState] = None,
 ) -> None:
-    """Encode latest OpenCV frame as JPEG and broadcast while clients are connected."""
+    """Encode latest OpenCV frame as JPEG and broadcast while clients are connected.
+
+    Overlays are drawn on a copy of the frame (see overlay_state / docs).
+    """
     interval = 1.0 / max(fps, 0.1)
     while not shutdown.is_set():
         if manager.has_clients():
             frame = camera.get_latest_frame()
             if frame is not None:
-                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                vis = render_overlays(frame, overlay_state)
+                ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
                 if ok:
                     await manager.broadcast_bytes(buf.tobytes())
         try:

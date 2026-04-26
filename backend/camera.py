@@ -1,10 +1,13 @@
+import glob
+import os
+import time
 import cv2
 import threading
-import time
 import logging
-from typing import List, Callable
+from typing import List, Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
 
 class CameraStream:
     def __init__(self, camera_index=0):
@@ -19,12 +22,41 @@ class CameraStream:
     def register_ui_callback(self, callback: Callable):
         self._ui_callbacks.append(callback)
 
+    def _open_capture(self) -> Tuple[Optional[cv2.VideoCapture], str]:
+        """Try requested index/path, then first working /dev/video* (e.g. no /dev/video0)."""
+        video_nodes = sorted(glob.glob("/dev/video*"))
+
+        def try_cap(opener) -> Tuple[Optional[cv2.VideoCapture], str]:
+            cap = opener()
+            if cap.isOpened():
+                return cap, "ok"
+            cap.release()
+            return None, ""
+
+        # 1) Requested index (int or string path). Skip missing /dev/videoN to avoid useless V4L errors.
+        c, _ = None, ""
+        if isinstance(self.camera_index, int):
+            dev = f"/dev/video{self.camera_index}"
+            if os.path.exists(dev):
+                c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
+        else:
+            c, _ = try_cap(lambda: cv2.VideoCapture(self.camera_index))
+        if c is not None:
+            return c, "direct"
+
+        # 2) Auto: first working /dev/video*
+        for path in video_nodes:
+            c, _ = try_cap(lambda p=path: cv2.VideoCapture(p))
+            if c is not None:
+                return c, f"auto:{path}"
+        return None, "none"
+
     def start(self):
-        self.cap = cv2.VideoCapture(self.camera_index)
-        if not self.cap.isOpened():
-            logger.error(f"Failed to open camera {self.camera_index}")
+        self.cap, _ = self._open_capture()
+        if self.cap is None or not self.cap.isOpened():
+            logger.error("Failed to open camera (index=%s); tried auto-fallback to /dev/video*", self.camera_index)
             return
-        
+
         self.running = True
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()

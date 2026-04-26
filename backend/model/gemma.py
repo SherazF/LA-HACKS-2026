@@ -5,17 +5,28 @@ import base64
 import cv2
 import os
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
 from bus import EventBus
+from overlay_state import OverlayState
+
 from .context import ContextManager
 
 logger = logging.getLogger(__name__)
 
+
 class ModelManager:
-    def __init__(self, bus: EventBus, ollama_url: str = "http://localhost:11434", model_name: str = "gemma"):
+    def __init__(
+        self,
+        bus: EventBus,
+        ollama_url: str = "http://localhost:11434",
+        model_name: str = "gemma",
+        overlay_state: Optional[OverlayState] = None,
+    ):
         self.bus = bus
-        self.ollama_url = ollama_url.rstrip('/')
+        self.ollama_url = ollama_url.rstrip("/")
         self.model_name = model_name
+        self.overlay_state = overlay_state
         self.queue = asyncio.PriorityQueue()
         self.context = ContextManager(image_limit=2)
         self.processing_lock = asyncio.Lock()
@@ -70,6 +81,13 @@ class ModelManager:
         img_str = base64.b64encode(buffer).decode('utf-8')
         self.context.add_image(img_str)
         logger.debug(f"Visual memory updated with processed frame (256x256)")
+
+    def _apply_overlays_from_response(self, data: Optional[Dict[str, Any]]) -> None:
+        if not self.overlay_state or not data:
+            return
+        ops = data.get("overlay_operations")
+        if isinstance(ops, list):
+            self.overlay_state.apply_model_operations(ops)
 
     async def on_snapshot_ready(self, frame):
         if not self.context.is_initialized:
@@ -141,6 +159,7 @@ class ModelManager:
         
         if json_resp:
             self.context.update_state(json_resp)
+            self._apply_overlays_from_response(json_resp)
             response_text = json_resp.get("response", "")
             if response_text and response_text.strip().lower() != "empty":
                 if self.context.add_message("assistant", response_text):
@@ -155,6 +174,7 @@ class ModelManager:
         
         if json_resp:
             self.context.update_state(json_resp)
+            self._apply_overlays_from_response(json_resp)
             response_text = json_resp.get("response", "")
             if response_text and response_text.strip().lower() != "empty":
                 if self.context.add_message("assistant", response_text):

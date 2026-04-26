@@ -13,6 +13,7 @@ from bus import EventBus
 from camera import CameraStream
 from chat import ChatManager
 from model.gemma import ModelManager
+from overlay_state import OverlayState
 from snapshot import SnapshotManager
 from ui import UIManager
 from voice import VoiceInputManager
@@ -43,9 +44,12 @@ async def lifespan(app: FastAPI):
     bus = EventBus()
     camera = CameraStream(camera_index=CAMERA_INDEX)
     camera.start()
+    overlay_state = OverlayState()
 
     ollama_url = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
-    model_manager = ModelManager(bus, ollama_url=ollama_url, model_name=OLLAMA_MODEL)
+    model_manager = ModelManager(
+        bus, ollama_url=ollama_url, model_name=OLLAMA_MODEL, overlay_state=overlay_state
+    )
     snapshot_manager = SnapshotManager(bus, camera, interval=SNAPSHOT_INTERVAL)
     voice_manager = VoiceInputManager(bus)
     connection_manager = ConnectionManager()
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI):
     app.state.voice_manager = voice_manager
     app.state.connection_manager = connection_manager
     app.state.shutdown = shutdown
+    app.state.overlay_state = overlay_state
 
     background_tasks: List[asyncio.Task] = []
     background_tasks.append(asyncio.create_task(model_manager.start(), name="model_manager"))
@@ -65,7 +70,7 @@ async def lifespan(app: FastAPI):
     background_tasks.append(
         asyncio.create_task(
             run_camera_frame_stream(
-                connection_manager, camera, shutdown, CAMERA_STREAM_FPS
+                connection_manager, camera, shutdown, CAMERA_STREAM_FPS, overlay_state
             ),
             name="camera_stream",
         )
