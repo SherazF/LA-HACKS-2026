@@ -30,7 +30,7 @@ class ModelManager:
         self.model_name = model_name
         self.overlay_state = overlay_state
         self.queue = asyncio.PriorityQueue()
-        self.context = ContextManager(token_limit=256000)
+        self.context = ContextManager(token_limit=64000)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
         self._snapshot_queued = False # Track if a snapshot is already waiting
