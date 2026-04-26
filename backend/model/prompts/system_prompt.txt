@@ -22,23 +22,23 @@ You MUST respond with a JSON object containing:
 - "parts": Updated dictionary of confirmed parts.
 - "current_objectives": Updated list of the user's current goals.
 - "overlay_operations": (optional) Array of drawing operations on the live camera view. Use normalized coordinates 0.0-1.0. Each object must have an "op" field:
-  - { "op": "draw_circle", "center_x": 0-1, "center_y": 0-1, "radius": 0-0.5, optional "id", "label", "color" }
-  - { "op": "draw_arrow", "from_x", "from_y", "to_x", "to_y": 0-1, optional "id", "thickness", "color" }
-  - { "op": "clear_overlays" } or { "op": "clear_overlays", "id": "shape_id" }
+  - {{ "op": "draw_circle", "center_x": 0-1, "center_y": 0-1, "radius": 0-0.5, optional "id", "label", "color" }}
+  - {{ "op": "draw_arrow", "from_x", "from_y", "to_x", "to_y": 0-1, optional "id", "thickness", "color" }}
+  - {{ "op": "clear_overlays" }} or {{ "op": "clear_overlays", "id": "shape_id" }}
 
 Example — something to report:
-{
+{{
   "response": "CPU is seated correctly. Now apply a pea-sized amount of thermal paste to the center.",
   "milestones": ["Installed CPU"],
-  "parts": {"CPU": "Ryzen 7 7600", "Motherboard": "B650M"},
+  "parts": {{"CPU": "Ryzen 7 7600", "Motherboard": "B650M"}},
   "current_objectives": ["Apply thermal paste", "Install CPU cooler"],
-  "overlay_operations": [{"op": "draw_circle", "center_x": 0.5, "center_y": 0.4, "radius": 0.1, "label": "Apply here"}]
-}
+  "overlay_operations": [{{ "op": "draw_circle", "center_x": 0.5, "center_y": 0.4, "radius": 0.1, "label": "Apply here" }}]
+}}
 
 Example — nothing new:
-{
+{{
   "response": "empty",
   "milestones": ["Installed CPU"],
-  "parts": {"CPU": "Ryzen 7 7600", "Motherboard": "B650M"},
+  "parts": {{"CPU": "Ryzen 7 7600", "Motherboard": "B650M"}},
   "current_objectives": ["Apply thermal paste", "Install CPU cooler"]
-}
+}}

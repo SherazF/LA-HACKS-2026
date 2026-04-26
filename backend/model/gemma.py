@@ -5,6 +5,7 @@ import base64
 import cv2
 import os
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from bus import EventBus
@@ -30,7 +31,7 @@ class ModelManager:
         self.model_name = model_name
         self.overlay_state = overlay_state
         self.queue = asyncio.PriorityQueue()
-        self.context = ContextManager(token_limit=64000)
+        self.context = ContextManager(token_limit=256000)
         self.processing_lock = asyncio.Lock()
         self.current_task = None
         self._snapshot_queued = False # Track if a snapshot is already waiting
@@ -40,6 +41,7 @@ class ModelManager:
         self.system_prompt_tpl = self._load_prompt("system_prompt.txt")
         self.snapshot_prompt_tpl = self._load_prompt("snapshot_prompt.txt")
         self.initial_request_tpl = self._load_prompt("initial_request.txt")
+        self.known_parts = self._load_prompt("known_parts.txt")
         
         # Subscribe to events
         self.bus.subscribe("snapshot_ready", self.on_snapshot_ready)
@@ -146,7 +148,7 @@ class ModelManager:
                     # Signal inference done inside the lock to ensure strict timing
                     await self.bus.emit("inference_done")
             except Exception as e:
-                logger.error(f"Model Manager error: {e}")
+                logger.error(f"Model Manager error ({type(e).__name__}): {e}", exc_info=True)
                 await asyncio.sleep(0.1)
 
     async def _process_chat(self, text: str):
@@ -184,11 +186,20 @@ class ModelManager:
 
     async def _query_model(self) -> Optional[Dict]:
         formatted_state = self.context.get_formatted_state()
-        system_prompt = self.system_prompt_tpl.format(
-            milestones=formatted_state["milestones"],
-            parts=formatted_state["parts"],
-            current_objectives=formatted_state["current_objectives"],
-        )
+        try:
+            system_prompt = self.system_prompt_tpl.format(
+                known_parts=self.known_parts,
+                milestones=formatted_state["milestones"],
+                parts=formatted_state["parts"],
+                current_objectives=formatted_state["current_objectives"],
+            )
+        except KeyError as e:
+            logger.error(f"KeyError in system_prompt.format: {e}")
+            logger.error(f"Available keys in system_prompt_tpl: {re.findall(r'\{([^}]+)\}', self.system_prompt_tpl)}")
+            raise
+        except Exception as e:
+            logger.error(f"Error in system_prompt.format: {e}")
+            raise
         messages = self.context.get_messages_payload(system_prompt)
 
         payload = {
