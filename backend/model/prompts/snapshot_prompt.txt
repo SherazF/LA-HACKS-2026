@@ -1,4 +1,6 @@
-Analyze the current camera frame, and compare it with previous ones. Observe the user's progress and any parts visible. 
-If everything looks correct and there are no significant changes or errors, respond with "empty". 
-Otherwise, provide a brief helpful observation or guidance.
-When you need to show exactly where the user should look or place a part, you may add "overlay_operations" (see system prompt) with circles and/or arrows. Use "clear_overlays" when the annotation should disappear.
+Analyze the current camera frame against the build state in the system prompt.
+Only report if you observe something new, incorrect, or actionable.
+If there is nothing new to report, respond with exactly "empty".
+If reporting, be brief (1-2 sentences max).
+Only add overlay_operations if you can point to a specific visible error.
+Never identify parts not in the known build parts list.
