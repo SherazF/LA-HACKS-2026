@@ -237,12 +237,24 @@ class ModelManager:
 
     async def _query_model(self, transient_prompt: Optional[str] = None) -> Optional[Dict]:
         formatted_state = self.context.get_formatted_state()
+        # Auto-evict overlays the model forgot to clear so they don't pile up
+        # forever, then describe whatever is still on screen so the model can
+        # decide whether to keep, replace, or clear them this turn.
+        if self.overlay_state is not None:
+            cleared = self.overlay_state.clear_stale()
+            if cleared:
+                logger.info("Auto-cleared %d stale overlay(s)", cleared)
+            active_overlays = self.overlay_state.describe_active()
+        else:
+            active_overlays = "none"
+
         try:
             system_prompt = self.system_prompt_tpl.format(
                 known_parts=self.known_parts,
                 milestones=formatted_state["milestones"],
                 parts=formatted_state["parts"],
                 current_objectives=formatted_state["current_objectives"],
+                active_overlays=active_overlays,
             )
         except KeyError as e:
             logger.error("KeyError in system_prompt.format: %s", e)

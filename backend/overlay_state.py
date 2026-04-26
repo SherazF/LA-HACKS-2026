@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -15,6 +16,12 @@ DEFAULT_BGR = (0, 255, 0)
 _MAX_RADIUS = 0.5
 _THICKNESS_MIN = 1
 _THICKNESS_MAX = 16
+
+# Overlays older than this are auto-cleared as a safety net so the model can't
+# leave stale annotations sitting on screen forever if it forgets to issue
+# a clear_overlays op. The model can refresh an overlay by re-emitting it
+# (which resets its created_at timestamp via the same `id`).
+DEFAULT_STALE_AGE_SECONDS = 45.0
 
 
 def _clip01(x: float) -> float:
@@ -89,6 +96,7 @@ class OverlayState:
                 "radius": _clip_radius(op.get("radius", 0.05)),
                 "label": (str(op["label"]).strip() if op.get("label") is not None else None) or None,
                 "color": parse_color(op.get("color")),
+                "created_at": time.monotonic(),
             }
         except (KeyError, TypeError, ValueError):
             return
@@ -114,6 +122,7 @@ class OverlayState:
                 "to_y": _clip01(op["to_y"]),
                 "thickness": th,
                 "color": parse_color(op.get("color")),
+                "created_at": time.monotonic(),
             }
         except (KeyError, TypeError, ValueError):
             return
@@ -126,6 +135,40 @@ class OverlayState:
     def snapshot_shapes(self) -> List[Dict[str, Any]]:
         with self._lock:
             return [dict(s) for s in self._shapes]
+
+    def clear_stale(self, max_age_seconds: float = DEFAULT_STALE_AGE_SECONDS) -> int:
+        """Drop overlays that haven't been refreshed recently. Returns the number cleared."""
+        cutoff = time.monotonic() - max_age_seconds
+        with self._lock:
+            before = len(self._shapes)
+            self._shapes = [s for s in self._shapes if s.get("created_at", 0) >= cutoff]
+            return before - len(self._shapes)
+
+    def describe_active(self) -> str:
+        """Compact human-readable summary of currently-drawn overlays for the model.
+
+        Format keeps tokens low while still letting the model decide whether to
+        clear or replace existing shapes. Empty list → "none".
+        """
+        with self._lock:
+            shapes = list(self._shapes)
+        if not shapes:
+            return "none"
+        now = time.monotonic()
+        parts: List[str] = []
+        for i, s in enumerate(shapes):
+            age = max(0, int(now - s.get("created_at", now)))
+            sid = s.get("id") or f"#{i + 1}"
+            if s.get("type") == "circle":
+                label = s.get("label") or "(no label)"
+                parts.append(
+                    f'{sid}: circle@({s["center_x"]:.2f},{s["center_y"]:.2f}) "{label}" ({age}s old)'
+                )
+            elif s.get("type") == "arrow":
+                parts.append(
+                    f'{sid}: arrow ({s["from_x"]:.2f},{s["from_y"]:.2f})→({s["to_x"]:.2f},{s["to_y"]:.2f}) ({age}s old)'
+                )
+        return "; ".join(parts)
 
 
 def render_overlays(
