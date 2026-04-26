@@ -110,6 +110,13 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("images", nargs="*", type=Path, help="image files to feed in turn order")
     parser.add_argument("--user", default="Hey, I'm starting a new build. I have a Ryzen 7 and a B650 motherboard out on the desk.")
+    parser.add_argument(
+        "--chat-after",
+        action="append",
+        default=[],
+        metavar="INDEX:TEXT",
+        help="Inject a chat message after snapshot turn INDEX. Repeatable. e.g. 2:'where do I plug this in?'",
+    )
     parser.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", "gemma4:e4b"))
     parser.add_argument("--ollama-url", default=f"http://{os.environ.get('OLLAMA_HOST','localhost')}:{os.environ.get('OLLAMA_PORT','11434')}")
     parser.add_argument("--temp", type=float, default=GENERATION_OPTIONS["temperature"])
@@ -156,7 +163,11 @@ async def main() -> None:
             if response and response.lower() != "empty":
                 ctx.add_message("assistant", response)
 
-        # Subsequent images: each runs a transient snapshot turn.
+        chat_after: dict[int, str] = {}
+        for entry in args.chat_after:
+            idx_s, _, text = entry.partition(":")
+            chat_after[int(idx_s)] = text
+
         for idx, img in enumerate(images[1:], start=2):
             ctx.add_image(img)
             formatted = ctx.get_formatted_state()
@@ -173,6 +184,24 @@ async def main() -> None:
                 response = (parsed.get("response") or "").strip()
                 if response and response.lower() != "empty":
                     ctx.add_message("assistant", response)
+
+            chat_text = chat_after.get(idx)
+            if chat_text:
+                ctx.add_message("user", chat_text)
+                formatted = ctx.get_formatted_state()
+                system = system_tpl.format(
+                    known_parts=known_parts,
+                    milestones=formatted["milestones"],
+                    parts=formatted["parts"],
+                    current_objectives=formatted["current_objectives"],
+                )
+                msgs = ctx.get_messages_payload(system)
+                parsed = await run_turn(client, args.ollama_url, args.model, msgs, options, f"TURN {idx}.5 — user chat: {chat_text!r}")
+                if parsed:
+                    ctx.update_state(parsed)
+                    response = (parsed.get("response") or "").strip()
+                    if response and response.lower() != "empty":
+                        ctx.add_message("assistant", response)
 
 
 if __name__ == "__main__":
