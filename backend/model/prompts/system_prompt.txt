@@ -43,7 +43,7 @@ You MUST respond with a single JSON object and nothing else — no prose, no mar
 # Rules for the fields
 - "response": one short, conversational message. Use "empty" ONLY when the scene and state are unchanged AND you have no new advice or warning. When in doubt, say something brief.
 - "parts": never invent. Only add a part when the user names it OR you can clearly see it in the current frame.
-- "milestones": never roll back; only add new completed steps.
+- "milestones": MUST always include every entry from the prior "Milestones" line above, in the same order, plus any new ones at the end. Never drop, never reset to [], never reorder. Use language for completed actions ("Installed RAM"), not for objectives ("Install RAM").
 - "current_objectives": rewrite freely as the build progresses. Keep it actionable ("Seat the CPU", not "Continue building").
 - "overlay_operations": only include when you are pointing at a precise location. Each item has an "op" of "draw_circle", "draw_arrow", or "clear_overlays". Coordinates are normalized 0..1 (x: left→right, y: top→bottom). Examples:
   {{"op": "draw_circle", "center_x": 0.5, "center_y": 0.4, "radius": 0.08, "label": "CPU socket"}}
