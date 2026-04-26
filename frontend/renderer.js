@@ -198,6 +198,91 @@ function updateCollapseToggle(isCollapsed) {
   updatePinnedInstruction();
 }
 
+let cachedVoice = null;
+let cachedVoiceListSize = 0;
+
+function scoreVoice(voice) {
+  const name = (voice.name || "").toLowerCase();
+  const lang = (voice.lang || "").toLowerCase();
+  let score = 0;
+  if (lang.startsWith("en-us")) score += 30;
+  else if (lang.startsWith("en")) score += 18;
+  else score -= 50;
+  if (voice.localService) score += 8;
+  if (/siri/.test(name)) score += 60;
+  if (/\bneural\b|\bnatural\b/.test(name)) score += 50;
+  if (/\bpremium\b/.test(name)) score += 40;
+  if (/\benhanced\b/.test(name)) score += 35;
+  if (/\b(eloquence|novelty|whisper|bells|cellos|bubbles|deranged|hysterical|trinoids|zarvox)\b/.test(name)) score -= 80;
+  if (/\b(samantha|ava|zoe|allison|susan|tom|evan|nicky|joelle|noelle|nathan|aaron|karen|serena|daniel)\b/.test(name)) score += 12;
+  if (/\b(microsoft|espeak|google us english)\b/.test(name)) score -= 6;
+  if (/compact/.test(name)) score -= 10;
+  return score;
+}
+
+function pickBestVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+  if (cachedVoice && voices.length === cachedVoiceListSize) {
+    return cachedVoice;
+  }
+  let best = null;
+  let bestScore = -Infinity;
+  for (const v of voices) {
+    const s = scoreVoice(v);
+    if (s > bestScore) {
+      bestScore = s;
+      best = v;
+    }
+  }
+  cachedVoice = best;
+  cachedVoiceListSize = voices.length;
+  if (best) {
+    console.log(
+      `[tts] using voice: ${best.name} (${best.lang}) score=${bestScore} local=${best.localService}`,
+    );
+  }
+  return best;
+}
+
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    cachedVoice = null;
+    cachedVoiceListSize = 0;
+    pickBestVoice();
+  };
+  pickBestVoice();
+}
+
+function splitForSpeech(text) {
+  const cleaned = String(text).replace(/\s+/g, " ").trim();
+  if (!cleaned) return [];
+  const matches = cleaned.match(/[^.!?]+[.!?]+(?:["')\]]+)?|\S[^.!?]*$/g);
+  const sentences = matches && matches.length ? matches : [cleaned];
+  const chunks = [];
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (s.length <= 200) {
+      chunks.push(s);
+      continue;
+    }
+    const parts = s.split(/(?<=,|;|—|–|:)\s+/);
+    let buf = "";
+    for (const p of parts) {
+      if ((buf + " " + p).trim().length > 200 && buf) {
+        chunks.push(buf.trim());
+        buf = p;
+      } else {
+        buf = buf ? `${buf} ${p}` : p;
+      }
+    }
+    if (buf.trim()) chunks.push(buf.trim());
+  }
+  return chunks;
+}
+
 function speakResponse(text) {
   if (!ttsEnabled || !text) {
     return;
@@ -207,23 +292,31 @@ function speakResponse(text) {
   }
   try {
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.rate = 1.05;
-    utter.pitch = 1.0;
-    utter.volume = 1.0;
+    const chunks = splitForSpeech(text);
+    if (chunks.length === 0) return;
+    const voice = pickBestVoice();
     ttsSpeaking = true;
     ttsBtn.classList.add("speaking");
-    utter.onend = () => {
+    const onAllDone = () => {
       ttsSpeaking = false;
       ttsBtn.classList.remove("speaking");
       maybeRearmVoiceAfterReply();
     };
-    utter.onerror = () => {
-      ttsSpeaking = false;
-      ttsBtn.classList.remove("speaking");
-      maybeRearmVoiceAfterReply();
-    };
-    window.speechSynthesis.speak(utter);
+    chunks.forEach((chunk, i) => {
+      const utter = new SpeechSynthesisUtterance(chunk);
+      if (voice) utter.voice = voice;
+      utter.rate = 0.97;
+      utter.pitch = 1.02;
+      utter.volume = 1.0;
+      utter.lang = (voice && voice.lang) || "en-US";
+      if (i === chunks.length - 1) {
+        utter.onend = onAllDone;
+        utter.onerror = onAllDone;
+      } else {
+        utter.onerror = onAllDone;
+      }
+      window.speechSynthesis.speak(utter);
+    });
   } catch (e) {
     console.warn("TTS failed", e);
     ttsSpeaking = false;
