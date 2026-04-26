@@ -346,7 +346,23 @@ function speakResponse(text) {
   }
 }
 
+let lastAssistantTextSeen = "";
+let lastAssistantTextSeenAt = 0;
+
 function handleAssistantText(text) {
+  // De-dup: backend may replay the same message on a quick WS reconnect.
+  // Suppress repeats within a short window so users don't see "ghost"
+  // double-replies.
+  const now = Date.now();
+  if (
+    text === lastAssistantTextSeen &&
+    now - lastAssistantTextSeenAt < 30_000
+  ) {
+    console.debug("[ws] suppressed duplicate assistant message");
+    return;
+  }
+  lastAssistantTextSeen = text;
+  lastAssistantTextSeenAt = now;
   appendMessage("assistant", text);
   recordAssistantMessage(text);
   if (ttsEnabled) {

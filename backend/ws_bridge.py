@@ -1,8 +1,10 @@
 import asyncio
+import collections
 import json
 import logging
 import os
-from typing import Optional, Set
+import time
+from typing import Deque, Optional, Set
 
 import cv2
 from fastapi import WebSocket, WebSocketDisconnect
@@ -15,12 +17,30 @@ logger = logging.getLogger(__name__)
 
 CAMERA_STREAM_JPEG_QUALITY = int(os.getenv("CAMERA_STREAM_JPEG_QUALITY", "92"))
 
+# Tiny ring buffer of recent assistant messages so a client that reconnects
+# mid-reply doesn't silently lose the model's response. Capped at N entries
+# AND by age so the chat doesn't fill with stale stuff on a long reconnect.
+REPLAY_BUFFER_SIZE = 20
+REPLAY_MAX_AGE_SECONDS = 30.0
+
+# Message types worth replaying when a client (re)connects. Transient signals
+# (voice_state, pong, status) only make sense in the moment.
+REPLAYABLE_TYPES = {"chat_response", "vision_result", "voice_transcript"}
+
 
 class ConnectionManager:
-    """Tracks active WebSocket clients; broadcasts JSON text or JPEG binary."""
+    """Tracks active WebSocket clients; broadcasts JSON text or JPEG binary.
+
+    Maintains a small ring buffer of recent replayable messages so a client
+    that reconnects mid-reply doesn't silently lose the model's response.
+    """
 
     def __init__(self) -> None:
         self._active: Set[WebSocket] = set()
+        # (monotonic_ts, payload) pairs.
+        self._replay: Deque[tuple[float, dict]] = collections.deque(
+            maxlen=REPLAY_BUFFER_SIZE
+        )
 
     def has_clients(self) -> bool:
         return bool(self._active)
@@ -29,9 +49,24 @@ class ConnectionManager:
     def client_count(self) -> int:
         return len(self._active)
 
+    def _fresh_replay(self) -> list[dict]:
+        cutoff = time.monotonic() - REPLAY_MAX_AGE_SECONDS
+        return [p for ts, p in self._replay if ts >= cutoff]
+
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self._active.add(websocket)
+        fresh = self._fresh_replay()
+        if fresh:
+            logger.info(
+                "Replaying %d buffered message(s) to new client", len(fresh)
+            )
+            for past in fresh:
+                try:
+                    await websocket.send_text(json.dumps(past))
+                except Exception:
+                    self.disconnect(websocket)
+                    return
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._active.discard(websocket)
@@ -44,10 +79,21 @@ class ConnectionManager:
             raise
 
     async def broadcast_json(self, payload: dict) -> None:
+        if payload.get("type") in REPLAYABLE_TYPES:
+            self._replay.append((time.monotonic(), payload))
         if not self._active:
+            if payload.get("type") in REPLAYABLE_TYPES:
+                logger.warning(
+                    "No WS clients connected — buffered for replay (type=%s)",
+                    payload.get("type"),
+                )
             return
         text = json.dumps(payload)
-        logger.info(f"Broadcasting JSON to {len(self._active)} client(s)")
+        logger.info(
+            "Broadcasting JSON to %d client(s) (type=%s)",
+            len(self._active),
+            payload.get("type"),
+        )
         dead: list[WebSocket] = []
         for ws in list(self._active):
             try:
